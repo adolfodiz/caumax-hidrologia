@@ -1,0 +1,33 @@
+/tu_app_web/
+├── app.py
+├── requirements.txt
+├── static/
+│   ├── index.html
+│   └── formulas/
+│       ├── gev_formula.svg  # Placeholder for GEV formula image
+│       └── tcev_formula.svg # Placeholder for TCEV formula image
+├── data/
+│   ├── mdt.tif
+│   ├── dir.tif
+│   ├── i1id.tif
+│   ├── p0.tif
+│   ├── t2.tif
+│   ├── t5.tif
+│   ├── t10.tif
+│   ├── t25.tif
+│   ├── t100.tif
+│   ├── t500.tif
+│   ├── q2.tif
+│   ├── q5.tif
+│   ├── q10.tif
+│   ├── q25.tif
+│   ├── q100.tif
+│   ├── q500.tif
+│   ├── demarcaciones_hidrograficas.gpkg
+│   ├── rios.gpkg
+│   └── regiones.gpkg
+└── core_logic/
+    ├── basin_calculator_refactored.py
+    ├── hydrology_methods.py
+    ├── gis_utils.py
+    ├── __init__.py
