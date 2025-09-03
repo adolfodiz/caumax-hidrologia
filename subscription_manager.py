@@ -276,7 +276,7 @@ def show_subscription_ui():
 def check_access():
     """Verificar si el usuario tiene acceso a la aplicación"""
     # Email del administrador (acceso completo siempre) 
-    ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@example.com")
+    ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@caumax.com")
     
     if st.session_state.get("user_email") == ADMIN_EMAIL:
         return True
