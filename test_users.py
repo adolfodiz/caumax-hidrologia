@@ -52,7 +52,7 @@ def create_test_mode_manager():
             self.test_mode = True
             # Usar el mismo producto real para pruebas
             self.product_id = "prod_Sys0oqoPo4gez4"  # Tu Product ID real
-            self.price_id = None
+            self.price_id = "price_1S2uGhRoxsFOnt6irCnbfGrJ"  # Price ID de 50€/año
             
         def check_subscription_status(self, customer_email):
             """Override para usar datos de prueba PERO consultar Stripe real"""
