@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Perfil Interactivo</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Leaflet (Mapa) -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <!-- Leaflet.draw (Herramienta de dibujo) -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+    <!-- Plotly (Gráficos) -->
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <!-- geotiff.js (Magia para leer TIFs) -->
+    <script src="https://unpkg.com/geotiff@2.0.7/dist-browser/geotiff.js"></script>
+
+    <style>
+        body { font-family: sans-serif; margin: 0; padding: 0; display: flex; flex-direction: column; height: 100vh; }
+        #map { flex: 1; }
+        #charts { height: 300px; display: flex; flex-direction: column; border-top: 2px solid #ccc; }
+        .chart-container { flex: 1; }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    <div id="charts">
+        <div id="elevation-chart" class="chart-container"></div>
+        <div id="landcover-chart" class="chart-container"></div>
+    </div>
+
+    <script>
+        // --- 1. CONFIGURACIÓN Y DATOS INYECTADOS POR PYTHON ---
+        const demUrl = "%%DEM_URL%%";
+        const corineUrl = "%%CORINE_URL%%";
+        const cnUrl = "%%CN_URL%%";
+        const bounds = %%BOUNDS%%; // [minLng, minLat, maxLng, maxLat]
+
+        // Mapa de colores oficial de CORINE
+        const corineColorMap = {
+            111: '#E6004D', 112: '#FF0000', 121: '#CC4DF2', 122: '#CC0000', 123: '#E6CCCC',
+            124: '#E6CCE6', 131: '#A600CC', 132: '#A64DCC', 133: '#FF4DFF', 141: '#FFA6FF',
+            142: '#FFE6FF', 211: '#FFFFA8', 212: '#FFFF00', 213: '#E6E600', 221: '#E68000',
+            222: '#F2A64D', 223: '#E6A600', 231: '#E6E64D', 241: '#FFE6A6', 242: '#FFE64D',
+            243: '#E6CC4D', 244: '#F2CCA6', 311: '#80FF00', 312: '#00A600', 313: '#4DFF00',
+            321: '#CCF24D', 322: '#A6FF80', 323: '#A6E64D', 324: '#A6F200', 331: '#E6E6E6',
+            332: '#CCCCCC', 333: '#CCFFCC', 334: '#000000', 335: '#A6E6CC', 411: '#A6A6FF',
+            412: '#4D4DFF', 421: '#CCCCFF', 422: '#E6E6FF', 423: '#A6A6E6', 511: '#00CCF2',
+            512: '#80F2E6', 521: '#00FFFF', 522: '#A6FFFF', 523: '#E6FFFF'
+        };
+
+        // --- 2. INICIALIZACIÓN DE MAPA Y GRÁFICOS ---
+        const map = L.map('map').fitBounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]]);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }).addTo(map);
+
+        const drawnItems = new L.FeatureGroup();
+        map.addLayer(drawnItems);
+        const drawControl = new L.Control.Draw({
+            draw: { polyline: { shapeOptions: { color: 'red' } }, polygon: false, marker: false, circle: false, rectangle: false, circlemarker: false },
+            edit: { featureGroup: drawnItems }
+        });
+        map.addControl(drawControl);
+
+        Plotly.newPlot('elevation-chart', [], { title: 'Perfil de Elevación', margin: { t: 30, b: 30, l: 40, r: 10 } });
+        Plotly.newPlot('landcover-chart', [], { title: 'Cobertura (CORINE) y Número de Curva (CN)', margin: { t: 30, b: 30, l: 40, r: 10 } });
+
+        // --- 3. LÓGICA PRINCIPAL ---
+        let tiffDem, tiffCorine, tiffCn;
+        let imageDem, imageCorine, imageCn;
+
+        // Cargar todos los GeoTIFFs al inicio
+        Promise.all([
+            GeoTIFF.fromUrl(demUrl).then(t => tiffDem = t),
+            GeoTIFF.fromUrl(corineUrl).then(t => tiffCorine = t),
+            GeoTIFF.fromUrl(cnUrl).then(t => tiffCn = t)
+        ]).then(async () => {
+            imageDem = await tiffDem.getImage();
+            imageCorine = await tiffCorine.getImage();
+            imageCn = await tiffCn.getImage();
+            console.log("Rasters cargados y listos.");
+        }).catch(err => console.error(err));
+
+        // Evento que se dispara al crear una línea
+        map.on(L.Draw.Event.CREATED, function (event) {
+            const layer = event.layer;
+            drawnItems.clearLayers();
+            drawnItems.addLayer(layer);
+            updateCharts(layer.getLatLngs());
+        });
+
+        // Función para actualizar los gráficos
+        async function updateCharts(latlngs) {
+            if (!imageDem || latlngs.length < 2) return;
+
+            const samples = 100; // Número de puntos a muestrear a lo largo de la línea
+            const distances = [];
+            const elevations = [];
+            const corineValues = [];
+            const cnValues = [];
+            let totalDistance = 0;
+
+            for (let i = 0; i < samples; i++) {
+                const point = interpolatePoint(latlngs, i / (samples - 1));
+                const lng = point.lng;
+                const lat = point.lat;
+
+                if (i > 0) {
+                    const prevPoint = interpolatePoint(latlngs, (i - 1) / (samples - 1));
+                    totalDistance += L.latLng(prevPoint).distanceTo(L.latLng(point));
+                }
+                distances.push(totalDistance / 1000); // en km
+
+                const [demVal] = await imageDem.readRasters({ window: getWindow(imageDem, lng, lat), resampleMethod: 'bilinear' });
+                const [corineVal] = await imageCorine.readRasters({ window: getWindow(imageCorine, lng, lat) });
+                const [cnVal] = await imageCn.readRasters({ window: getWindow(imageCn, lng, lat) });
+                
+                elevations.push(demVal);
+                corineValues.push(corineVal);
+                cnValues.push(cnVal);
+            }
+            
+            // Actualizar gráfico de elevación
+            Plotly.react('elevation-chart', [{ x: distances, y: elevations, type: 'scatter', mode: 'lines', name: 'Elevación' }], { title: 'Perfil de Elevación', xaxis: {title: 'Distancia (km)'}, yaxis: {title: 'Elevación (m)'} });
+
+            // Actualizar gráfico de cobertura
+            const corineColors = corineValues.map(code => corineColorMap[code] || '#FFFFFF');
+            Plotly.react('landcover-chart', [
+                { x: distances, y: cnValues, type: 'scatter', mode: 'lines', name: 'Número de Curva (CN)', line: {color: 'blue'} },
+                { x: distances, y: Array(distances.length).fill(0), type: 'bar', marker: { color: corineColors }, name: 'CORINE', text: corineValues.map(String), hoverinfo: 'text' }
+            ], { title: 'Cobertura (CORINE) y Número de Curva (CN)', xaxis: {title: 'Distancia (km)'}, yaxis: {title: 'Valor CN', range: [0, 100]} });
+        }
+
+        // --- 4. FUNCIONES AUXILIARES ---
+        // Interpola un punto a lo largo de una polilínea
+        function interpolatePoint(latlngs, fraction) {
+            let totalLen = 0;
+            for (let i = 0; i < latlngs.length - 1; i++) totalLen += L.latLng(latlngs[i]).distanceTo(L.latLng(latlngs[i+1]));
+            
+            const targetLen = totalLen * fraction;
+            let traveledLen = 0;
+
+            for (let i = 0; i < latlngs.length - 1; i++) {
+                const p1 = latlngs[i];
+                const p2 = latlngs[i+1];
+                const segmentLen = L.latLng(p1).distanceTo(L.latLng(p2));
+                if (traveledLen + segmentLen >= targetLen) {
+                    const segmentFraction = (targetLen - traveledLen) / segmentLen;
+                    return L.latLng(
+                        p1.lat + (p2.lat - p1.lat) * segmentFraction,
+                        p1.lng + (p2.lng - p1.lng) * segmentFraction
+                    );
+                }
+                traveledLen += segmentLen;
+            }
+            return latlngs[latlngs.length - 1];
+        }
+
+        // Obtiene la ventana de píxeles para una coordenada
+        function getWindow(image, lng, lat) {
+            const [originX, originY] = image.getOrigin();
+            const [resX, resY] = image.getResolution();
+            const px = Math.floor((lng - originX) / resX);
+            const py = Math.floor((lat - originY) / resY);
+            return [px, py, px + 1, py + 1];
+        }
+    </script>
+</body>
+</html>
