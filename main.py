@@ -1,15 +1,29 @@
 import streamlit as st
+import os
+import json
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+import folium
+from streamlit_folium import st_folium
+import io
+import zipfile
+import tempfile
+from shapely.ops import unary_union
+from pathlib import Path
+import rasterio
+
+# Cargar variables de entorno
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 def main():
     """Aplicación principal unificada: Landing + App completa"""
     
-    # Configurar página
-    st.set_page_config(
-        page_title="CAUMAX - Análisis Hidrológico", 
-        page_icon="💧",
-        layout="wide",
-        initial_sidebar_state="collapsed"
-    )
+    # NO configurar página aquí - lo hará app.py cuando sea necesario
     
     # Si va a mostrar suscripción → mostrar UI de Stripe integrada
     if st.session_state.get("show_subscription", False):
@@ -145,63 +159,17 @@ def show_subscription_flow():
         st.rerun()
 
 def show_main_app():
-    """Aplicación principal completa"""
+    """Ejecutar TU app.py original directamente"""
     
-    # Importar módulos de la aplicación
-    import dem25_tab
-    import gis_tabs
-    import perfil_terreno_tab
-    from test_users import enable_test_mode, is_test_mode, show_test_users_selector, show_stripe_test_cards
+    # Importar y ejecutar tu aplicación original
+    import app
     
-    st.title("💧 CAUMAX - Análisis Hidrológico Profesional")
-    
-    # Sidebar con controles
-    with st.sidebar:
-        st.markdown(f"### 👤 Usuario: {st.session_state.get('user_email', 'N/A')}")
-        
-        # Activar modo prueba
-        if st.button("🧪 Activar Modo Prueba"):
-            enable_test_mode()
-            st.rerun()
-        
-        # Mostrar selector de usuarios de prueba
-        if is_test_mode():
-            selected_user = show_test_users_selector()
-            show_stripe_test_cards()
-            if selected_user:
-                st.session_state.user_email = selected_user
-        
-        # Botón para volver al landing
-        if st.button("← Cerrar Sesión"):
-            st.session_state.authenticated = False
-            st.session_state.show_subscription = False
-            st.rerun()
-    
-    # Pestañas de la aplicación principal
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "🏔️ Análisis de Cuenca", 
-        "🗺️ Análisis DEM25",
-        "📊 Perfil del Terreno", 
-        "🌐 Capas GIS"
-    ])
-
-    with tab1:
-        dem25_tab.render_dem25_tab()
-
-    with tab2:
-        gis_tabs.render_gis_tabs()
-
-    with tab3:
-        # Buscar función correcta
-        if hasattr(perfil_terreno_tab, 'render_perfil_terreno_tab'):
-            perfil_terreno_tab.render_perfil_terreno_tab()
-        else:
-            st.header("📊 Perfil del Terreno")
-            st.info("Módulo disponible")
-
-    with tab4:
-        st.header("🌐 Capas GIS Adicionales")
-        st.info("Funcionalidades GIS adicionales")
+    # Llamar a main() de tu aplicación
+    if hasattr(app, 'main'):
+        app.main()
+    else:
+        # Si no tiene main(), ejecutar todo el módulo
+        pass
 
 if __name__ == "__main__":
     main()
