@@ -1,4 +1,4 @@
 # Requirements optimizado para deployment web
 streamlit==1.40.2
-stripe==11.11.0
-requests==2.32.3
+stripe==12.5.0
+requests==2.32.5
