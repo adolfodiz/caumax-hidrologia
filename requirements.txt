@@ -3,7 +3,7 @@
 
 # Framework principal
 streamlit==1.40.2
-streamlit-folium==0.26.0
+streamlit-folium==0.20.0
 
 # Geoespaciales core
 geopandas==1.1.1
