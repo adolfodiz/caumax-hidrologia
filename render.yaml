@@ -38,4 +38,4 @@ services:
       size: 1  # 1GB para archivos temporales
       
     # Comando de inicio (sobrescribe CMD del Dockerfile si es necesario)
-    startCommand: streamlit run main.py --server.port=10000 --server.address=0.0.0.0
+    startCommand: streamlit run streamlit_app.py --server.port=10000 --server.address=0.0.0.0
