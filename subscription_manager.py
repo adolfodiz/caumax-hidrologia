@@ -12,8 +12,8 @@ class SubscriptionManager:
     def __init__(self):
         self.annual_price_eur = 50.00
         # Usar el Product ID existente en lugar de crear productos nuevos
-        self.product_id = "prod_Sys0oqoPo4gez4"  # Tu Product ID de CAUMAX
-        self.price_id = "price_1S2uGhRoxsFOnt6irCnbfGrJ"  # Price ID de 50€/año
+        self.product_id = "prod_SzVpPCKZvAfOIj"  # Tu Product ID de CAUMAX
+        self.price_id = "price_1S3WnNRpY2dtiP4VBiNKFy02"  # Price ID de 50€/año
         
     def create_customer(self, email, name=None):
         """Crear un cliente en Stripe"""
