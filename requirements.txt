@@ -1,6 +1,6 @@
 # Requirements optimizado para deployment web
 streamlit==1.40.2
-stripe==11.11.0
+stripe==10.5.0
 requests==2.32.3
 plotly==5.24.1
 folium==0.19.2
