@@ -10,5 +10,5 @@ numpy==1.26.4
 shapely==2.1.1
 geopandas==1.1.1
 rasterio==1.4.3
+fiona==1.10.1
 pillow==11.3.0
-# GDAL se instala via apt en Dockerfile, no pip para Render
