@@ -1,0 +1,41 @@
+# Configuración para Render.com
+# Deploy automático desde repositorio GitHub
+
+services:
+  - type: web
+    name: caumax-hidrologico
+    runtime: docker
+    plan: starter  # Plan gratuito de Render
+    
+    # Configuración del build
+    dockerfilePath: ./Dockerfile
+    dockerContext: ./
+    
+    # Variables de entorno
+    envVars:
+      - key: PYTHONPATH
+        value: /app
+      - key: STREAMLIT_SERVER_ADDRESS
+        value: 0.0.0.0
+      - key: STREAMLIT_SERVER_PORT
+        value: 10000  # Puerto que usa Render
+      - key: STREAMLIT_BROWSER_GATHER_USAGE_STATS
+        value: false
+      - key: STREAMLIT_SERVER_ENABLE_CORS
+        value: false
+      - key: STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION
+        value: false
+    
+    # Health check
+    healthCheckPath: /
+    
+    # Auto-deploy desde main branch
+    autoDeploy: true
+    
+    # Configuración de recursos
+    disk:
+      name: caumax-data
+      size: 1  # 1GB para archivos temporales
+      
+    # Comando de inicio (sobrescribe CMD del Dockerfile si es necesario)
+    startCommand: streamlit run app.py --server.port=10000 --server.address=0.0.0.0
