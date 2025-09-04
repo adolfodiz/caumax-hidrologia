@@ -71,25 +71,9 @@ COPY --from=pysheds-env /app/Py2Env ./Py2Env
 # Copiar requirements de la aplicación principal
 COPY requirements.txt ./
 
-# Crear requirements optimizado para web (sin versiones problemáticas)
-RUN echo "streamlit==1.40.2" > requirements-web.txt && \
-    echo "folium==0.19.2" >> requirements-web.txt && \
-    echo "streamlit-folium==0.26.0" >> requirements-web.txt && \
-    echo "geopandas==1.1.1" >> requirements-web.txt && \
-    echo "rasterio==1.4.3" >> requirements-web.txt && \
-    echo "pyproj==3.7.2" >> requirements-web.txt && \
-    echo "shapely==2.1.1" >> requirements-web.txt && \
-    echo "matplotlib==3.10.5" >> requirements-web.txt && \
-    echo "plotly==5.24.1" >> requirements-web.txt && \
-    echo "pandas==2.3.1" >> requirements-web.txt && \
-    echo "scipy==1.16.1" >> requirements-web.txt && \
-    echo "numpy==1.26.4" >> requirements-web.txt && \
-    echo "Pillow==11.3.0" >> requirements-web.txt && \
-    echo "branca==0.9.0" >> requirements-web.txt
-
 # Instalar dependencias de la aplicación principal
 RUN pip install --no-cache-dir --upgrade pip
-RUN pip install --no-cache-dir -r requirements-web.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copiar código fuente de la aplicación
 COPY app.py ./
