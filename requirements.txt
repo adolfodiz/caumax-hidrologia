@@ -1,14 +1,20 @@
 # Requirements optimizado para deployment web
+# Framework principal
 streamlit==1.40.2
 stripe==10.5.0
-requests==2.32.3
-plotly==5.24.1
-folium==0.19.2
-streamlit-folium==0.17.4
-pandas==2.3.1
-numpy==1.26.4
-shapely==2.1.1
+# Geoespaciales COMPLETAS
+GDAL>=3.4,<3.8
+fiona==1.10.1
 geopandas==1.1.1
 rasterio==1.4.3
-fiona==1.10.1
+shapely==2.1.1
+pyproj>=3.4,<3.8
+# Visualización
+folium==0.19.2
+streamlit-folium==0.17.4
+plotly==5.24.1
+# Análisis
+pandas==2.3.1
+numpy==1.26.4
+scipy>=1.11,<1.15
 pillow==11.3.0
