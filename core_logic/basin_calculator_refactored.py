@@ -1,7 +1,15 @@
 # core_logic/basin_calculator_refactored.py
 
 import numpy as np
-from osgeo import gdal, osr, ogr
+# from osgeo import gdal, osr, ogr
+try:
+    from osgeo import gdal, osr, ogr
+    GDAL_AVAILABLE = True
+except ImportError:
+    GDAL_AVAILABLE = False
+    gdal = None
+    osr = None
+    ogr = None
 from shapely.geometry import shape, mapping # <-- MEJORA 2: Importar mapping
 from shapely.ops import transform as shapely_transform
 import os
@@ -15,8 +23,9 @@ from fiona.crs import from_epsg
 
 class BasinCalculatorRefactored:
     def __init__(self, data_folder, layer_mapping):
-        gdal.UseExceptions()
-        gdal.AllRegister()
+        if GDAL_AVAILABLE:
+            gdal.UseExceptions()
+            gdal.AllRegister()
         
         self.data_folder = data_folder
         self.layer_mapping = layer_mapping
