@@ -34,7 +34,7 @@ from core_logic.hydrology_methods import (
  
 
 from pyproj import Transformer, CRS
-from pysheds.grid import Grid
+# from pysheds.grid import Grid  ---> no hace falta aquí == crea problemas en el deploy
 
 
 import gis_tabs
