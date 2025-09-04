@@ -15,25 +15,26 @@ RUN conda create -n pysheds_env python=3.9 -y && \
 
 # Activar entorno e instalar dependencias principales
 RUN conda install -n pysheds_env -c conda-forge \
-    pysheds=0.5 \
-    numpy=1.26.4 \
-    scipy=1.11.4 \
-    matplotlib=3.9.4 \
-    geopandas=1.0.1 \
-    rasterio=1.4.3 \
-    shapely=2.1.1 \
-    pyproj=3.7.2 \
-    networkx=3.3 \
-    numba=0.60.0 \
-    scikit-image=0.22.0 \
-    pillow=11.3.0 \
-    pandas=2.3.1 \
-    folium=0.19.2 \
-    pytz=2024.2 \
-    click=8.1.7 \
-    cartopy=0.23.0 \
-    contourpy=1.3.0 \
-    packaging=25.0 \
+    python=3.9 \
+    pysheds \
+    numpy \
+    scipy \
+    matplotlib \
+    geopandas \
+    rasterio \
+    shapely \
+    pyproj \
+    networkx \
+    numba \
+    scikit-image \
+    pillow \
+    pandas \
+    folium \
+    pytz \
+    click \
+    cartopy \
+    contourpy \
+    packaging \
     -y && \
     conda clean -a -y
 
