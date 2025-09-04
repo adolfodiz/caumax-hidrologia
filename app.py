@@ -10,7 +10,14 @@ from streamlit_folium import st_folium
 import io
 import zipfile
 import tempfile
-from osgeo import osr, gdal, ogr
+#from osgeo import osr, gdal, ogr
+try:
+    from osgeo import osr, gdal, ogr
+except ImportError:
+    st.error("GDAL no disponible - algunas funciones limitadas")
+    gdal = None
+    ogr = None
+    osr = None
 from shapely.ops import unary_union
 import pandas as pd
 from pathlib import Path
