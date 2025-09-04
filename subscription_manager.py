@@ -62,6 +62,15 @@ class SubscriptionManager:
                 status="active"
             )
             
+            st.info(f"📋 DEBUG: Suscripciones activas: {len(subscriptions.data)}")
+            
+            # AGREGAR: Ver todas las suscripciones (cualquier estado)
+            all_subs = stripe.Subscription.list(customer=customer.id)
+            st.info(f"📋 DEBUG: Total suscripciones: {len(all_subs.data)}")
+            for sub in all_subs.data:
+                st.info(f"  - Suscripción {sub.id}: Estado = {sub.status}")
+                    
+            
             if subscriptions.data:
                 subscription = subscriptions.data[0]
                 return {
