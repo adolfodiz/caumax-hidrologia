@@ -2,7 +2,7 @@
 # Mantiene la arquitectura dual-environment: Python 3.13 principal + Python 3.9 para PySheds
 
 # Etapa 1: Entorno PySheds con Python 3.9 usando Conda
-FROM continuumio/miniconda3:4.12.0 as pysheds-env
+FROM continuumio/miniconda3:latest as pysheds-env
 
 # Configurar conda para usar conda-forge y evitar conflictos
 RUN conda config --add channels conda-forge && \
