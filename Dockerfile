@@ -41,7 +41,7 @@ RUN conda install -n pysheds_env -c conda-forge \
 WORKDIR /app/Py2Env
 
 # Copiar script de delineación
-COPY scripts/delinear_cuenca.py ./delinear_cuenca.py
+COPY delinear_cuenca.py ./delinear_cuenca.py
 
 # Etapa 2: Aplicación principal con Python 3.13
 FROM python:3.13-slim
