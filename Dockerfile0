@@ -1,47 +1,29 @@
 # Dockerfile multi-stage para deployment web
 # Mantiene la arquitectura dual-environment: Python 3.13 principal + Python 3.9 para PySheds
 
-# Etapa 1: Entorno PySheds con Python 3.9 usando Conda
-FROM continuumio/miniconda3:4.12.0 as pysheds-env
+# Etapa 1: Entorno PySheds con Python 3.9
+FROM python:3.9-slim as pysheds-env
 
-# Configurar conda para usar conda-forge y evitar conflictos
-RUN conda config --add channels conda-forge && \
-    conda config --set channel_priority strict && \
-    conda update -n base -c defaults conda
-
-# Crear entorno conda con Python 3.9 y dependencias geoespaciales
-RUN conda create -n pysheds_env python=3.9 -y && \
-    conda clean -a -y
-
-# Activar entorno e instalar dependencias principales
-RUN conda install -n pysheds_env -c conda-forge \
-    pysheds=0.5 \
-    numpy=1.26.4 \
-    scipy=1.11.4 \
-    matplotlib=3.9.4 \
-    geopandas=1.0.1 \
-    rasterio=1.4.3 \
-    shapely=2.1.1 \
-    pyproj=3.7.2 \
-    networkx=3.3 \
-    numba=0.60.0 \
-    scikit-image=0.22.0 \
-    pillow=11.3.0 \
-    pandas=2.3.1 \
-    folium=0.19.2 \
-    pytz=2024.2 \
-    click=8.1.7 \
-    cartopy=0.23.0 \
-    contourpy=1.3.0 \
-    packaging=25.0 \
-    -y && \
-    conda clean -a -y
+# Instalar dependencias del sistema para compilación
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libgdal-dev \
+    gdal-bin \
+    && rm -rf /var/lib/apt/lists/*
 
 # Crear directorio para el entorno PySheds
 WORKDIR /app/Py2Env
 
-# Copiar script de delineación
-COPY scripts/delinear_cuenca.py ./delinear_cuenca.py
+# Crear entorno virtual para PySheds
+RUN python -m venv venv_pysheds
+
+# Copiar requirements específico de PySheds y script
+COPY Py2Env/requirements.txt ./
+COPY Py2Env/delinear_cuenca.py ./
+
+# Instalar dependencias PySheds en el entorno virtual
+RUN ./venv_pysheds/bin/pip install --no-cache-dir --upgrade pip
+RUN ./venv_pysheds/bin/pip install --no-cache-dir -r requirements.txt
 
 # Etapa 2: Aplicación principal con Python 3.13
 FROM python:3.13-slim
@@ -63,8 +45,7 @@ ENV PROJ_LIB=/usr/share/proj
 # Crear directorio de la aplicación
 WORKDIR /app
 
-# Copiar entorno conda PySheds desde la etapa anterior
-COPY --from=pysheds-env /opt/conda/envs/pysheds_env ./conda_env/pysheds_env
+# Copiar entorno PySheds desde la etapa anterior
 COPY --from=pysheds-env /app/Py2Env ./Py2Env
 
 # Copiar requirements de la aplicación principal
@@ -105,7 +86,7 @@ RUN mkdir -p .streamlit
 RUN echo "[server]" > .streamlit/config.toml && \
     echo "headless = true" >> .streamlit/config.toml && \
     echo "address = \"0.0.0.0\"" >> .streamlit/config.toml && \
-    echo "port = 8501" >> .streamlit/config.toml && \
+    echo "port = 10000" >> .streamlit/config.toml && \
     echo "enableCORS = false" >> .streamlit/config.toml && \
     echo "enableXsrfProtection = false" >> .streamlit/config.toml && \
     echo "" >> .streamlit/config.toml && \
@@ -113,10 +94,10 @@ RUN echo "[server]" > .streamlit/config.toml && \
     echo "base = \"light\"" >> .streamlit/config.toml
 
 # Exponer puerto
-EXPOSE 8501
+EXPOSE 10000
 
-# Verificar que el entorno conda PySheds funciona
-RUN /app/conda_env/pysheds_env/bin/python --version
+# Verificar que el entorno PySheds funciona
+RUN /app/Py2Env/venv_pysheds/bin/python --version
 
 # Comando de inicio
-CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+CMD ["streamlit", "run", "streamlit_app.py", "--server.port=10000", "--server.address=0.0.0.0"]
