@@ -64,13 +64,13 @@ RUN apt-get update && apt-get install -y \
     libspatialindex-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Luego instalar python bindings
-# ENV GDAL_CONFIG=/usr/bin/gdal-config
-# RUN pip install GDAL==3.8.4  # Versión exacta del sistema
-
-# Configurar variables de entorno GDAL
+# Variables entorno (ANTES del pip install)
+ENV GDAL_CONFIG=/usr/bin/gdal-config
 ENV GDAL_DATA=/usr/share/gdal
 ENV PROJ_LIB=/usr/share/proj
+
+# GDAL para Python 3.13 específicamente
+RUN python3.13 -m pip install --no-cache-dir GDAL[numpy]==3.8.4
 
 # Crear directorio de la aplicación
 WORKDIR /app
