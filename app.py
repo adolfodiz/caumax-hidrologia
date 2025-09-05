@@ -1,6 +1,8 @@
 # app.py (Modificado para eliminar el perfil del cauce principal)
 
 import streamlit as st
+# --- Interfaz de Usuario de Streamlit ---
+st.set_page_config(layout="wide", page_title="Calculadora Hidrológica y GIS")
 import json
 import os
 import numpy as np
@@ -264,8 +266,7 @@ def export_geometry_to_zip(geometry, filename_base, crs_wkt):
         st.warning(f"No se pudo crear el shapefile para {filename_base}: {e}")
         return None
 
-# --- Interfaz de Usuario de Streamlit ---
-st.set_page_config(layout="wide", page_title="Calculadora Hidrológica y GIS")
+
 
 if 'lon_wgs84' not in st.session_state:
     st.session_state.lon_wgs84 = -3.703790

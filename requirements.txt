@@ -8,7 +8,7 @@ pandas==2.3.1
 scipy>=1.11,<1.15
 pillow==11.3.0
 # Geoespaciales COMPLETAS
-# GDAL>=3.4,<3.8  --> insertarlo en Dockerfile via conda
+GDAL>=3.4,<3.8  --> insertarlo en Dockerfile via conda
 fiona==1.10.1
 geopandas==1.1.1
 rasterio==1.4.3
