@@ -50,6 +50,7 @@ FROM python:3.13-slim
 # Instalar dependencias del sistema
 RUN apt-get update && apt-get install -y \
     build-essential \
+    python3-dev \
     libgdal-dev \
     gdal-bin \
     libproj-dev \
