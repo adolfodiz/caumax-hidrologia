@@ -88,10 +88,10 @@ COPY MDT25_peninsula_UTM30N.tif ./
 RUN mkdir -p .streamlit
 
 # Configuración Streamlit para deployment
+# Configuración Streamlit para deployment
 RUN echo "[server]" > .streamlit/config.toml && \
     echo "headless = true" >> .streamlit/config.toml && \
     echo "address = \"0.0.0.0\"" >> .streamlit/config.toml && \
-    echo "port = 8501" >> .streamlit/config.toml && \
     echo "enableCORS = false" >> .streamlit/config.toml && \
     echo "enableXsrfProtection = false" >> .streamlit/config.toml && \
     echo "" >> .streamlit/config.toml && \
@@ -105,4 +105,4 @@ EXPOSE 8501
 RUN /app/conda_env/pysheds_env/bin/python --version
 
 # Comando de inicio
-CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+CMD streamlit run app.py --server.port=$PORT --server.address=0.0.0.0
