@@ -83,7 +83,7 @@ COPY perfil_terreno_tab.py ./
 COPY core_logic/ ./core_logic/
 COPY logo.png ./
 COPY data/ ./data/
-# COPY MDT25_peninsula_UTM30N.tif ./
+COPY MDT25_peninsula_UTM30N.tif ./
 # Crear directorio de configuración Streamlit
 RUN mkdir -p .streamlit
 
