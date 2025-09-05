@@ -38,6 +38,10 @@ RUN conda install -n pysheds_env -c conda-forge \
     -y && \
     conda clean -a -y
 
+# Instalar GDAL via conda (más confiable)
+RUN conda install -n pysheds_env -c conda-forge gdal=3.8.4 -y && \
+    conda clean -a -y
+
 # Crear directorio para el entorno PySheds
 WORKDIR /app/Py2Env
 
@@ -51,6 +55,7 @@ FROM python:3.13-slim
 RUN apt-get update && apt-get install -y \
     build-essential \
     python3-dev \
+    python3-numpy-dev \
     libgdal-dev \
     gdal-bin \
     libproj-dev \
