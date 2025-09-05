@@ -57,11 +57,16 @@ RUN apt-get update && apt-get install -y \
     python3-dev \
     python3-numpy-dev \
     libgdal-dev \
+    python3-gdal \
     gdal-bin \
     libproj-dev \
     libgeos-dev \
     libspatialindex-dev \
     && rm -rf /var/lib/apt/lists/*
+
+# Luego instalar python bindings
+# ENV GDAL_CONFIG=/usr/bin/gdal-config
+# RUN pip install GDAL==3.8.4  # Versión exacta del sistema
 
 # Configurar variables de entorno GDAL
 ENV GDAL_DATA=/usr/share/gdal
@@ -105,7 +110,7 @@ RUN echo "[server]" > .streamlit/config.toml && \
     echo "base = \"light\"" >> .streamlit/config.toml
 
 # Exponer puerto
-EXPOSE 8501
+# EXPOSE 8501  # Render se encarga del routing automáticamente
 
 # Verificar que el entorno conda PySheds funciona
 RUN /app/conda_env/pysheds_env/bin/python --version
