@@ -82,6 +82,7 @@ COPY gis_tabs.py ./
 COPY perfil_terreno_tab.py ./
 COPY core_logic/ ./core_logic/
 COPY logo.png ./
+COPY data/ ./data/
 
 # Crear directorio de configuración Streamlit
 RUN mkdir -p .streamlit
