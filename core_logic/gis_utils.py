@@ -3,6 +3,7 @@ import requests
 import io
 import tempfile
 import os
+from streamlit import cache_resource
 import rasterio
 import fiona
 from shapely.geometry import shape, Point
@@ -34,6 +35,34 @@ LAYER_MAPPING = {
     "FLOW_500": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/q500.tif",
 }
 
+# Creamos un directorio temporal seguro para esta sesión de la app
+_temp_dir = tempfile.TemporaryDirectory()
+
+@cache_resource(ttl=3600) # Cachea los archivos descargados por 1 hora
+def get_local_path_from_url(url):
+    """
+    Toma una URL, descarga el archivo a un directorio temporal persistente
+    y devuelve la RUTA LOCAL a ese archivo. Usa el cache de Streamlit
+    para asegurar que cada archivo solo se descarga una vez por sesión.
+    """
+    try:
+        filename = os.path.basename(url)
+        local_path = os.path.join(_temp_dir.name, filename)
+
+        # Si el archivo ya existe en el temporal, no lo descargues de nuevo
+        if os.path.exists(local_path):
+            return local_path
+
+        # Si no existe, descárgalo
+        with requests.get(url, stream=True) as r:
+            r.raise_for_status()
+            with open(local_path, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    f.write(chunk)
+        return local_path
+    except Exception as e:
+        print(f"Error crítico descargando el archivo {url}: {e}")
+        return None
 
 def get_layer_path(layer_key):
     """

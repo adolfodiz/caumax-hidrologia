@@ -2,6 +2,7 @@
 
 import numpy as np
 # from osgeo import gdal, osr, ogr
+from .gis_utils import get_local_path_from_url
 try:
     from osgeo import gdal, osr, ogr
     GDAL_AVAILABLE = True
@@ -22,7 +23,12 @@ import fiona
 from fiona.crs import from_epsg
 
 class BasinCalculatorRefactored:
-    def __init__(self, data_folder, layer_mapping):
+    def __init__(self, data_folder_unused, layer_mapping):
+        # Descargamos todas las rutas necesarias al iniciar la clase
+        self.layer_mapping = {
+            key: get_local_path_from_url(url)
+            for key, url in layer_mapping.items()
+        }
         if GDAL_AVAILABLE:
             gdal.UseExceptions()
             gdal.AllRegister()

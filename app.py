@@ -26,7 +26,7 @@ from pathlib import Path
 import rasterio
 
 # Importar lógica de negocio y las nuevas pestañas GIS
-from core_logic.gis_utils import get_raster_value_at_point, get_vector_feature_at_point, get_layer_path, load_geojson_from_gpkg, LAYER_MAPPING
+from core_logic.gis_utils import get_raster_value_at_point, get_vector_feature_at_point, get_layer_path, load_geojson_from_gpkg, LAYER_MAPPING, get_local_path_from_url
 from core_logic.basin_calculator_refactored import BasinCalculatorRefactored
 from core_logic.hydrology_methods import (
     calculate_rational_method, calculate_gev_fit, calculate_tcev_fit, 
@@ -63,8 +63,12 @@ TCEV_REGIONS = [72, 73, 84, 821, 822]
 @st.cache_data
 def get_cached_geojson_layer(layer_key):
     try:
-        gpkg_path = get_layer_path(layer_key)
-        return load_geojson_from_gpkg(gpkg_path)
+        # 1. Obtiene la URL
+        gpkg_url = get_layer_path(layer_key)
+        # 2. Obtiene la RUTA LOCAL (descargada y cacheada)
+        local_gpkg_path = get_local_path_from_url(gpkg_url)
+        # 3. Pasa la ruta local a la función que lee el archivo
+        return load_geojson_from_gpkg(local_gpkg_path)
     except Exception as e:
         st.error(f"Error al cargar la capa {layer_key}: {e}")
         return None
@@ -85,7 +89,7 @@ def create_all_download_zips(basin_calculator, outlet_coords):
         basin_zip_io.seek(0)
         rivers_zip_io = None
         try:
-            rivers_path = get_layer_path("RIVERS")
+            rivers_path = get_local_path_from_url(get_layer_path("RIVERS"))
             rios_recortados_path = os.path.join(tmpdir, "rios_recortados.shp")
             options = gdal.VectorTranslateOptions(format='ESRI Shapefile', clipSrc=basin_shp_path)
             gdal.VectorTranslate(rios_recortados_path, rivers_path, options=options)
@@ -99,7 +103,7 @@ def create_all_download_zips(basin_calculator, outlet_coords):
         except Exception: pass
         dem_zip_io = None
         try:
-            dem_path = get_layer_path("MDT")
+            dem_path = get_local_path_from_url(get_layer_path("MDT"))
             dem_tif_path_out = os.path.join(tmpdir, "mdt_recortado.tif")
             options_dem = gdal.WarpOptions(format='GTiff', cutlineDSName=basin_shp_path, cropToCutline=True, dstNodata=-9999)
             gdal.Warp(dem_tif_path_out, dem_path, options=options_dem)
