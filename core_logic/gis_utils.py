@@ -10,9 +10,6 @@ from shapely.geometry import shape, Point
 import json
 from pyproj import CRS, Transformer
 
-# --- ¡AQUÍ ESTÁ EL CAMBIO CLAVE! ---
-# El diccionario LAYER_MAPPING ahora VIVE en este archivo.
-# Esta es la única "fuente de la verdad" para las rutas de los datos.
 LAYER_MAPPING = {
     "BASINS": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/demarcaciones_hidrograficas.gpkg",
     "RIVERS": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/red10km.gpkg",
@@ -35,25 +32,15 @@ LAYER_MAPPING = {
     "FLOW_500": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/q500.tif",
 }
 
-# Creamos un directorio temporal seguro para esta sesión de la app
 _temp_dir = tempfile.TemporaryDirectory()
 
-@cache_resource(ttl=3600) # Cachea los archivos descargados por 1 hora
+@cache_resource(ttl=3600)
 def get_local_path_from_url(url):
-    """
-    Toma una URL, descarga el archivo a un directorio temporal persistente
-    y devuelve la RUTA LOCAL a ese archivo. Usa el cache de Streamlit
-    para asegurar que cada archivo solo se descarga una vez por sesión.
-    """
     try:
         filename = os.path.basename(url)
         local_path = os.path.join(_temp_dir.name, filename)
-
-        # Si el archivo ya existe en el temporal, no lo descargues de nuevo
         if os.path.exists(local_path):
             return local_path
-
-        # Si no existe, descárgalo
         with requests.get(url, stream=True) as r:
             r.raise_for_status()
             with open(local_path, 'wb') as f:
@@ -65,11 +52,38 @@ def get_local_path_from_url(url):
         return None
 
 def get_layer_path(layer_key):
-    """
-    Ahora que los datos están en la nube, esta función es mucho más simple.
-    Simplemente busca la clave en el diccionario LAYER_MAPPING importado y devuelve la URL completa.
-    """
     return LAYER_MAPPING.get(layer_key)
+
+def load_geojson_from_gpkg(local_gpkg_path):
+    """
+    Carga todos los objetos de un archivo GPKG desde una RUTA LOCAL TEMPORAL
+    y los devuelve como un GeoJSON FeatureCollection transformado a WGS84.
+    """
+    features = []
+    try:
+        # --- ¡AQUÍ ESTÁ LA CORRECCIÓN! ---
+        # Ya no usamos requests.get. Abrimos directamente la ruta local que nos han pasado.
+        with fiona.open(local_gpkg_path, 'r') as source:
+            source_crs = CRS(source.crs)
+            target_crs = CRS("EPSG:4326")
+            transformer = None
+            if source_crs != target_crs:
+                transformer = Transformer.from_crs(source_crs, target_crs, always_xy=True)
+            for feature in source:
+                geom = shape(feature['geometry'])
+                if transformer:
+                    from shapely.ops import transform
+                    geom = transform(transformer.transform, geom)
+                feature_dict = {
+                    "type": "Feature",
+                    "properties": dict(feature['properties']),
+                    "geometry": geom.__geo_interface__
+                }
+                features.append(feature_dict)
+        return {"type": "FeatureCollection", "features": features}
+    except Exception as e:
+        print(f"Error crítico cargando GeoJSON desde la ruta local {local_gpkg_path}: {e}")
+        return None
 
 def get_raster_value_at_point(raster_path, point_utm):
     """
@@ -135,57 +149,3 @@ def get_vector_feature_at_point(vector_path, point_utm):
         # logging.error(f"Error consultando la capa vectorial {vector_path} en {point_utm}: {e}")
         return None
 
-# En core_logic/gis_utils.py
-
-def load_geojson_from_gpkg(gpkg_path):
-    """
-    Carga todos los objetos de un archivo GPKG desde una URL.
-    Descarga el archivo a un fichero temporal en disco y luego lo procesa con Fiona.
-    Esto es mucho más robusto que leer directamente desde un buffer de memoria.
-    """
-    temp_file_path = None
-    try:
-        # PASO 1: Descargar el archivo desde la URL a un archivo temporal en el disco del servidor
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".gpkg") as temp_file:
-            temp_file_path = temp_file.name
-            with requests.get(gpkg_path, stream=True) as r:
-                r.raise_for_status()  # Lanza un error si la descarga falla
-                for chunk in r.iter_content(chunk_size=8192):
-                    temp_file.write(chunk)
-
-        # PASO 2: Abrir el archivo local temporal con Fiona (método 100% fiable)
-        features = []
-        with fiona.open(temp_file_path, 'r') as source:
-            source_crs = CRS(source.crs)
-            target_crs = CRS("EPSG:4326")
-
-            transformer = None
-            if source_crs != target_crs:
-                transformer = Transformer.from_crs(source_crs, target_crs, always_xy=True)
-
-            for feature in source:
-                geom = shape(feature['geometry'])
-                
-                if transformer:
-                    from shapely.ops import transform
-                    geom = transform(transformer.transform, geom)
-
-                feature_dict = {
-                    "type": "Feature",
-                    "properties": dict(feature['properties']),
-                    "geometry": geom.__geo_interface__
-                }
-                features.append(feature_dict)
-
-        return {
-            "type": "FeatureCollection",
-            "features": features
-        }
-    except Exception as e:
-        # Este print aparecerá en los logs de Render si algo falla
-        print(f"Error crítico cargando GeoJSON desde {gpkg_path}: {e}")
-        return None
-    finally:
-        # PASO 3: Asegurarse de que el archivo temporal se borra siempre
-        if temp_file_path and os.path.exists(temp_file_path):
-            os.remove(temp_file_path)
