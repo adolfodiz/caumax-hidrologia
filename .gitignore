@@ -1,132 +1,61 @@
-# Archivos de Python
+# Entornos virtuales y caché de Python
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
-
-# PyInstaller
-*.manifest
-*.spec
-
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py,cover
-.hypothesis/
-.pytest_cache/
-cover/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# IPython
-profile_default/
-ipython_config.py
-
-# Environments
-.env
-.venv
-env/
+.venv/
 venv/
-ENV/
-env.bak/
-venv.bak/
-Py2Env/venv_pysheds/  # Solo excluir el venv, mantener requirements y scripts
+env/
+*.pyc
 
-# Streamlit
-.streamlit/
-
-# IDEs
+# Archivos de configuración de IDEs
 .vscode/
 .idea/
-*.swp
-*.swo
 
-# Sistema operativo
+# Archivos de sistema operativo
 .DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
 Thumbs.db
 
-# Archivos temporales del proyecto
-*.tmp
-*.temp
-temp/
-tmp/
-
-
-# Logs
-*.log
-logs/
-
-# Archivos de configuración local
-config.local.py
-settings.local.py
-
-# Carpetas que no quieres en GitHub (ajusta según necesites)
-attached_assets/
-.cache/
-scripts/old/
-backup/
-archived/
-CLC2018_GPKG/
-CNIG/
-descargas/
-hms/
-MDT25/
-NASA DEM hgt/
-results/
-shapes/
-Wheels4Python/
-
-# Secrets y claves
-secrets.toml
-.secrets/
-*.pem
-*.key
-
-# Streamlit secrets
+# Archivos de Streamlit
 .streamlit/secrets.toml
 
-# Ignorar archivos TIF temporales en la raíz del proyecto
-/CORINE_VISU.tif
-/CORINE_visual.tif
-/SP_CV_modified.tif
-/SP_CV_modified_modified.tif
-/elevation.tif
-/output_COP30.tif
+# Archivos de dependencias y build
+*.egg-info/
+dist/
+build/
+wheels/
+*.whl
 
-# Ignorar carpetas de backup
-archivos_grandes_backup/
+# Logs y reportes
+*.log
+htmlcov/
+.coverage
+
+# Archivos de proyectos y notas (IGNORAR ESTOS TIPOS DE ARCHIVO)
+*.docx
+*.pdf
+*.xlsx
+*.txt
+*.Rhistory
+*.RData
+*.qgz
+*.qml
+*.qlr
+*.html
+*.csv
+*.zip
+
+# Carpetas de salida y temporales (IGNORAR ESTAS CARPETAS)
+/results/
+/shapes/
+/descargas/
+/hms/
+/backups/
+/archivos_grandes_backup/
+/attached_assets/
+/static/
+/MDT25/
+/NASA DEM hgt/
+/Wheels4Python/
+
+# Ignorar archivos TIF y VRT en la raíz del proyecto
+# Los datos deben estar en la carpeta /data
+/*.tif
+/*.vrt
