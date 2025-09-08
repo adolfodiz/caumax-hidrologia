@@ -60,7 +60,7 @@ EXTRAPOLATION_PERIODS = [1000, 5000, 10000] # <-- ADICIÓN
 TCEV_REGIONS = [72, 73, 84, 821, 822]
 
 # --- Funciones en Caché y Auxiliares (CÓDIGO ORIGINAL INTOCADO) ---
-@st.cache_data
+""" @st.cache_data
 def get_cached_geojson_layer(layer_key):
     try:
         # 1. Obtiene la URL
@@ -71,7 +71,35 @@ def get_cached_geojson_layer(layer_key):
         return load_geojson_from_gpkg(local_gpkg_path)
     except Exception as e:
         st.error(f"Error al cargar la capa {layer_key}: {e}")
-        return None
+        return None """
+
+# Añadimos un parámetro "dummy" para forzar al caché a invalidarse.
+# Cambia el número (ej. a _v=2) si necesitas forzarlo de nuevo en el futuro.
+@st.cache_data
+def get_cached_geojson_layer(layer_key, _v=1):
+    try:
+        gpkg_url = get_layer_path(layer_key)
+        if not gpkg_url:
+            st.error(f"No se encontró la URL para la capa '{layer_key}' en LAYER_MAPPING.")
+            return None
+
+        local_gpkg_path = get_local_path_from_url(gpkg_url)
+        if not local_gpkg_path:
+            st.error(f"Falló la descarga del archivo para la capa '{layer_key}' desde la URL: {gpkg_url}")
+            return None
+
+        geojson_data = load_geojson_from_gpkg(local_gpkg_path)
+        if not geojson_data:
+            st.error(f"Falló el procesamiento del archivo local '{local_gpkg_path}' para la capa '{layer_key}'.")
+            return None
+            
+        return geojson_data
+    except Exception as e:
+        # ¡EL CAMBIO MÁS IMPORTANTE!
+        # st.exception() mostrará el error completo y la traza en la propia app.
+        st.exception(e)
+        # Y 'raise' hará que la app se caiga y muestre el error en los logs de Render.
+        raise e
 
 def create_all_download_zips(basin_calculator, outlet_coords):
     if not basin_calculator.basinGeometryUTM:
