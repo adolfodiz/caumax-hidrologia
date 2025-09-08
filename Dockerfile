@@ -39,4 +39,4 @@ EXPOSE 8501
 
 # El comando de inicio ahora es más simple porque el entorno ya está activado
 # Render usará la variable $PORT, así que la pasamos al comando
-CMD streamlit run app.py --server.port=$PORT
+CMD micromamba run -n caumax-env streamlit run app.py --server.port=$PORT
