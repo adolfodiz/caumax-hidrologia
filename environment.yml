@@ -1,0 +1,31 @@
+name: caumax-env
+channels:
+  - conda-forge
+dependencies:
+  # --- Dependencias Geoespaciales y Científicas (manejadas por Conda) ---
+  - python=3.11  # Usamos una versión estable y compatible con todo
+  - gdal>=3.4,<3.9
+  - fiona
+  - geopandas
+  - rasterio
+  - shapely
+  - pyproj
+  - pysheds
+  - pyflwdir
+  - numpy
+  - pandas
+  - scipy
+  - pillow
+  - affine
+  - matplotlib
+  - plotly
+  - folium
+  - requests
+  
+  # --- Dependencias de la App (manejadas por Pip dentro de Conda) ---
+  - pip
+  - pip:
+    - streamlit==1.40.2
+    - streamlit-folium==0.17.4
+    - pydeck>=0.8.0
+    # - stripe==10.5.0 # Si necesitas stripe, descomenta esta línea

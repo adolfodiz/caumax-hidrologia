@@ -38,4 +38,4 @@ services:
       size: 1  # 1GB para archivos temporales
       
     # Comando de inicio (sobrescribe CMD del Dockerfile si es necesario)
-    startCommand: streamlit run app.py --server.port=$PORT --server.address=0.0.0.0
+     startCommand: conda run -n caumax-env streamlit run app.py --server.port=$PORT
