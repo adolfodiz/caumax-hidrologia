@@ -40,7 +40,8 @@ import rasterio
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 HOJAS_MTN25_PATH = os.path.join(PROJECT_ROOT, "CNIG", "MTN25_ACTUAL_ETRS89_Peninsula_Baleares_Canarias.shp")
-DEM_NACIONAL_PATH = os.path.join(PROJECT_ROOT, "MDT25_peninsula_UTM30N.tif")
+# DEM_NACIONAL_PATH = os.path.join(PROJECT_ROOT, "MDT25_peninsula_UTM30N.tif")
+DEM_NACIONAL_PATH = "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/MDT25_peninsula_UTM30N.tif"
 BUFFER_METROS = 5000
 LIMITE_AREA_KM2 = 15000
 

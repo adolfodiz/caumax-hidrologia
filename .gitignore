@@ -1,3 +1,7 @@
+# ==============================================================================
+# ARCHIVOS ESTÁNDAR DE PYTHON Y ENTORNO
+# ==============================================================================
+
 # Entornos virtuales y caché de Python
 __pycache__/
 .venv/
@@ -13,7 +17,7 @@ env/
 .DS_Store
 Thumbs.db
 
-# Archivos de Streamlit
+# Archivos de Streamlit (excepto config.toml)
 .streamlit/secrets.toml
 
 # Archivos de dependencias y build
@@ -28,7 +32,9 @@ wheels/
 htmlcov/
 .coverage
 
-# Archivos de proyectos y notas (IGNORAR ESTOS TIPOS DE ARCHIVO)
+# ==============================================================================
+# ARCHIVOS DE PROYECTO Y NOTAS (NO PARTE DE LA APP)
+# ==============================================================================
 *.docx
 *.pdf
 *.xlsx
@@ -42,7 +48,19 @@ htmlcov/
 *.csv
 *.zip
 
-# Carpetas de salida y temporales (IGNORAR ESTAS CARPETAS)
+# ==============================================================================
+# --- DATOS EXTERNOS Y CARPETAS DE SALIDA ---
+# Estos archivos y carpetas ahora se cargan desde Cloudflare R2 o son
+# generados por la aplicación, y NO deben estar en el repositorio.
+# ==============================================================================
+
+# La carpeta principal de datos ahora está en la nube
+/data/
+
+# El DEM nacional grande ahora está en la nube
+/MDT25_peninsula_UTM30N.tif
+
+# Carpetas de salida y temporales
 /results/
 /shapes/
 /descargas/
@@ -54,8 +72,3 @@ htmlcov/
 /MDT25/
 /NASA DEM hgt/
 /Wheels4Python/
-
-# Ignorar archivos TIF y VRT en la raíz del proyecto
-# Los datos deben estar en la carpeta /data
-/*.tif
-/*.vrt
