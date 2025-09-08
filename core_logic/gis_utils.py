@@ -1,5 +1,6 @@
 # core_logic/gis_utils.py (Versión Final y Correcta)
-
+import requests
+import io
 import rasterio
 import fiona
 from shapely.geometry import shape, Point
@@ -105,13 +106,18 @@ def get_vector_feature_at_point(vector_path, point_utm):
 
 def load_geojson_from_gpkg(gpkg_path):
     """
-    Carga todos los objetos de un archivo GPKG y los devuelve como un GeoJSON FeatureCollection.
-    Transforma las coordenadas a WGS84 (EPSG:4326) para Folium.
-    El gpkg_path puede ser una ruta local O una URL.
+    Carga todos los objetos de un archivo GPKG desde una URL, lo descarga a memoria
+    y lo devuelve como un GeoJSON FeatureCollection transformado a WGS84.
     """
     features = []
     try:
-        with fiona.open(gpkg_path, 'r') as source:
+        # PASO 1: Descargar el archivo desde la URL a la memoria
+        response = requests.get(gpkg_path)
+        response.raise_for_status()  # Esto lanzará un error si la descarga falla (ej. 404)
+
+        # PASO 2: Abrir el archivo desde la memoria usando fiona
+        # io.BytesIO trata el contenido descargado como un archivo en memoria
+        with fiona.open(io.BytesIO(response.content), 'r') as source:
             source_crs = CRS(source.crs)
             target_crs = CRS("EPSG:4326")
 
@@ -138,6 +144,6 @@ def load_geojson_from_gpkg(gpkg_path):
             "features": features
         }
     except Exception as e:
-        # import logging
-        # logging.error(f"Error cargando GeoJSON desde {gpkg_path}: {e}")
+        # Este print aparecerá en los logs de Render si algo falla
+        print(f"Error crítico cargando GeoJSON desde {gpkg_path}: {e}")
         return None
