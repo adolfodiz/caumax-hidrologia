@@ -1,60 +1,50 @@
+# core_logic/gis_utils.py (Versión Final y Correcta)
+
 import rasterio
 import fiona
 from shapely.geometry import shape, Point
-import os
 import json
 from pyproj import CRS, Transformer
 
-# Define the base data folder (relative to app.py)
-DATA_FOLDER = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
+# --- ¡IMPORTANTE! ---
+# Importamos el diccionario LAYER_MAPPING desde app.py.
+# Este es ahora nuestra ÚNICA "fuente de la verdad" para las rutas de los datos.
+from app import LAYER_MAPPING
 
-# This mapping should be consistent with app.py
-LAYER_MAPPING = {
-    "BASINS": "demarcaciones_hidrograficas.gpkg",
-    "RIVERS": "red10km.gpkg",
-    "ZONES": "regiones.gpkg",
-    "MDT": "mdt.tif",
-    "FLOWDIRS": "dir.tif",
-    "I1ID": "i1id.tif",
-    "P0": "p0.tif",
-    "RAIN_2": "t2.tif",
-    "RAIN_5": "t5.tif",
-    "RAIN_10": "t10.tif",
-    "RAIN_25": "t25.tif",
-    "RAIN_100": "t100.tif",
-    "RAIN_500": "t500.tif",
-    "FLOW_2": "q2.tif",
-    "FLOW_5": "q5.tif",
-    "FLOW_10": "q10.tif",
-    "FLOW_25": "q25.tif",
-    "FLOW_100": "q100.tif",
-    "FLOW_500": "q500.tif",
-}
+# --- ELIMINADO ---
+# Ya no definimos DATA_FOLDER ni un LAYER_MAPPING local aquí.
+# Esto asegura que siempre usemos las URLs de la nube definidas en app.py.
 
-def get_layer_path(layer_name_key):
+
+def get_layer_path(layer_key):
     """
-    Returns the full path to a GIS layer file using the LAYER_MAPPING.
+    Ahora que los datos están en la nube, esta función es mucho más simple.
+    Simplemente busca la clave en el diccionario LAYER_MAPPING importado y devuelve la URL completa.
     """
-    filename = LAYER_MAPPING.get(layer_name_key)
-    if not filename:
-        raise ValueError(f"Layer key '{layer_name_key}' not found in LAYER_MAPPING.")
-    
-    full_path = os.path.join(DATA_FOLDER, filename)
-    if not os.path.exists(full_path):
-        raise FileNotFoundError(f"Layer file not found: {full_path}. Check DATA_FOLDER and LAYER_MAPPING.")
-    return full_path
+    return LAYER_MAPPING.get(layer_key)
 
 def get_raster_value_at_point(raster_path, point_utm):
     """
-    Reads a raster value at a given UTM point (x, y).
-    Returns None if the point is outside the raster or is NoData.
+    Lee un valor de un ráster en un punto UTM (x, y) dado.
+    El raster_path puede ser una ruta local O una URL.
+    Devuelve None si el punto está fuera o es NoData.
     """
     try:
         with rasterio.open(raster_path) as src:
             if not isinstance(point_utm, (list, tuple)) or len(point_utm) != 2:
-                raise ValueError("point_utm must be a tuple or list of two floats (x, y).")
+                raise ValueError("point_utm debe ser una tupla o lista de dos floats (x, y).")
 
-            row, col = src.index(point_utm[0], point_utm[1])
+            # Convierte las coordenadas del punto al CRS del ráster si es necesario
+            # (Esta es una mejora de robustez, asumiendo que point_utm está en EPSG:25830)
+            point_crs = CRS("EPSG:25830")
+            raster_crs = CRS(src.crs)
+            if point_crs != raster_crs:
+                transformer = Transformer.from_crs(point_crs, raster_crs, always_xy=True)
+                point_x, point_y = transformer.transform(point_utm[0], point_utm[1])
+            else:
+                point_x, point_y = point_utm
+
+            row, col = src.index(point_x, point_y)
             
             if not (0 <= row < src.height and 0 <= col < src.width):
                 return None
@@ -65,32 +55,43 @@ def get_raster_value_at_point(raster_path, point_utm):
                 return None
             return value
     except Exception as e:
-        print(f"Error reading raster {raster_path} at {point_utm}: {e}")
+        # En un entorno de producción, es mejor usar logging en lugar de print
+        # import logging
+        # logging.error(f"Error leyendo el ráster {raster_path} en {point_utm}: {e}")
         return None
 
 def get_vector_feature_at_point(vector_path, point_utm):
     """
-    Finds the first vector feature at a given UTM point (x, y).
-    Returns the feature as a dictionary or None if no feature found.
+    Encuentra el primer objeto vectorial en un punto UTM (x, y) dado.
+    El vector_path puede ser una ruta local O una URL.
+    Devuelve el objeto como un diccionario o None si no se encuentra.
     """
     point_shapely = Point(point_utm)
     try:
         with fiona.open(vector_path, 'r') as source:
+            # Transforma el punto al CRS de la capa si es necesario
+            source_crs = CRS(source.crs)
+            point_crs = CRS("EPSG:25830")
+            if source_crs != point_crs:
+                transformer = Transformer.from_crs(point_crs, source_crs, always_xy=True)
+                from shapely.ops import transform
+                point_shapely = transform(transformer.transform, point_shapely)
+
             for feature in source:
-                # Use shapely.geometry.shape for robust geometry creation
                 geom_shapely = shape(feature['geometry'])
                 if geom_shapely.contains(point_shapely):
                     return feature
             return None
     except Exception as e:
-        print(f"Error querying vector layer {vector_path} at {point_utm}: {e}")
+        # import logging
+        # logging.error(f"Error consultando la capa vectorial {vector_path} en {point_utm}: {e}")
         return None
 
 def load_geojson_from_gpkg(gpkg_path):
     """
-    Loads all features from a GPKG file and returns them as a GeoJSON FeatureCollection.
-    Transforms coordinates to WGS84 (EPSG:4326) for Folium.
-    Ensures all parts are JSON serializable.
+    Carga todos los objetos de un archivo GPKG y los devuelve como un GeoJSON FeatureCollection.
+    Transforma las coordenadas a WGS84 (EPSG:4326) para Folium.
+    El gpkg_path puede ser una ruta local O una URL.
     """
     features = []
     try:
@@ -106,15 +107,13 @@ def load_geojson_from_gpkg(gpkg_path):
                 geom = shape(feature['geometry'])
                 
                 if transformer:
-                    # Transform the geometry object itself
                     from shapely.ops import transform
                     geom = transform(transformer.transform, geom)
 
-                # Create a JSON-serializable feature dictionary
                 feature_dict = {
                     "type": "Feature",
                     "properties": dict(feature['properties']),
-                    "geometry": geom.__geo_interface__ # Use the __geo_interface__ standard
+                    "geometry": geom.__geo_interface__
                 }
                 features.append(feature_dict)
 
@@ -123,5 +122,6 @@ def load_geojson_from_gpkg(gpkg_path):
             "features": features
         }
     except Exception as e:
-        print(f"Error loading GeoJSON from {gpkg_path}: {e}")
+        # import logging
+        # logging.error(f"Error cargando GeoJSON desde {gpkg_path}: {e}")
         return None

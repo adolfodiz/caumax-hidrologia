@@ -53,7 +53,7 @@ transformer_wgs84_to_utm30n = Transformer.from_crs(crs_wgs84, crs_utm30n, always
 transformer_utm30n_to_wgs84 = Transformer.from_crs(crs_utm30n, crs_wgs84, always_xy=True)
 
 # --- Rutas y Mapeo de Capas ---
-DATA_FOLDER = os.path.join(os.path.dirname(__file__), 'data')
+# DATA_FOLDER = os.path.join(os.path.dirname(__file__), 'data')
 LAYER_MAPPING = {
     "BASINS": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/demarcaciones_hidrograficas.gpkg", 
     "RIVERS": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/red10km.gpkg",
