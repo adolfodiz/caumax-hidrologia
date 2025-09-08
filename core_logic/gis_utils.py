@@ -1,6 +1,8 @@
 # core_logic/gis_utils.py (Versión Final y Correcta)
 import requests
 import io
+import tempfile
+import os
 import rasterio
 import fiona
 from shapely.geometry import shape, Point
@@ -104,20 +106,27 @@ def get_vector_feature_at_point(vector_path, point_utm):
         # logging.error(f"Error consultando la capa vectorial {vector_path} en {point_utm}: {e}")
         return None
 
+# En core_logic/gis_utils.py
+
 def load_geojson_from_gpkg(gpkg_path):
     """
-    Carga todos los objetos de un archivo GPKG desde una URL, lo descarga a memoria
-    y lo devuelve como un GeoJSON FeatureCollection transformado a WGS84.
+    Carga todos los objetos de un archivo GPKG desde una URL.
+    Descarga el archivo a un fichero temporal en disco y luego lo procesa con Fiona.
+    Esto es mucho más robusto que leer directamente desde un buffer de memoria.
     """
-    features = []
+    temp_file_path = None
     try:
-        # PASO 1: Descargar el archivo desde la URL a la memoria
-        response = requests.get(gpkg_path)
-        response.raise_for_status()  # Esto lanzará un error si la descarga falla (ej. 404)
+        # PASO 1: Descargar el archivo desde la URL a un archivo temporal en el disco del servidor
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".gpkg") as temp_file:
+            temp_file_path = temp_file.name
+            with requests.get(gpkg_path, stream=True) as r:
+                r.raise_for_status()  # Lanza un error si la descarga falla
+                for chunk in r.iter_content(chunk_size=8192):
+                    temp_file.write(chunk)
 
-        # PASO 2: Abrir el archivo desde la memoria usando fiona
-        # io.BytesIO trata el contenido descargado como un archivo en memoria
-        with fiona.open(io.BytesIO(response.content), 'r') as source:
+        # PASO 2: Abrir el archivo local temporal con Fiona (método 100% fiable)
+        features = []
+        with fiona.open(temp_file_path, 'r') as source:
             source_crs = CRS(source.crs)
             target_crs = CRS("EPSG:4326")
 
@@ -147,3 +156,7 @@ def load_geojson_from_gpkg(gpkg_path):
         # Este print aparecerá en los logs de Render si algo falla
         print(f"Error crítico cargando GeoJSON desde {gpkg_path}: {e}")
         return None
+    finally:
+        # PASO 3: Asegurarse de que el archivo temporal se borra siempre
+        if temp_file_path and os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
