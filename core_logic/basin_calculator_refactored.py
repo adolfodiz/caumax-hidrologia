@@ -1,8 +1,7 @@
 # core_logic/basin_calculator_refactored.py
 
 import numpy as np
-# from osgeo import gdal, osr, ogr
-from .gis_utils import get_local_path_from_url
+from .gis_utils import get_local_path_from_url, LAYER_MAPPING
 try:
     from osgeo import gdal, osr, ogr
     GDAL_AVAILABLE = True
@@ -11,7 +10,7 @@ except ImportError:
     gdal = None
     osr = None
     ogr = None
-from shapely.geometry import shape, mapping # <-- MEJORA 2: Importar mapping
+from shapely.geometry import shape, mapping
 from shapely.ops import transform as shapely_transform
 import os
 import math
@@ -20,28 +19,32 @@ from collections import defaultdict
 import json
 from pyproj import Transformer
 import fiona
-from fiona.crs import from_epsg
 
 class BasinCalculatorRefactored:
-    def __init__(self, data_folder_unused, layer_mapping):
-        # Descargamos todas las rutas necesarias al iniciar la clase
-        self.layer_mapping = {
-            key: get_local_path_from_url(url)
-            for key, url in layer_mapping.items()
-        }
-        if GDAL_AVAILABLE:
-            gdal.UseExceptions()
-            gdal.AllRegister()
+    def __init__(self, data_folder_unused, layer_mapping_from_app):
+        if not GDAL_AVAILABLE:
+            raise ImportError("GDAL no está disponible. No se puede inicializar BasinCalculator.")
         
-        self.data_folder = data_folder
-        self.layer_mapping = layer_mapping
+        gdal.UseExceptions()
+        gdal.AllRegister()
 
-        mdt_path = os.path.join(self.data_folder, self.layer_mapping["MDT"])
-        flowdirs_path = os.path.join(self.data_folder, self.layer_mapping["FLOWDIRS"])
+        # --- ¡AQUÍ ESTÁ LA LÓGICA CORREGIDA Y ÚNICA! ---
+        # 1. Usamos el diccionario de URLs que viene de la app.
+        # 2. Creamos un nuevo diccionario interno que contiene las RUTAS LOCALES
+        #    a los archivos descargados y cacheados.
+        self.local_layer_paths = {
+            key: get_local_path_from_url(url)
+            for key, url in layer_mapping_from_app.items()
+        }
+
+
+        # 3. Ahora, usamos este diccionario de rutas locales para abrir los archivos.
+        mdt_path = self.local_layer_paths["MDT"]
+        flowdirs_path = self.local_layer_paths["FLOWDIRS"]
 
         mdt_dataset = gdal.Open(mdt_path, gdal.GA_ReadOnly)
         if mdt_dataset is None:
-            raise FileNotFoundError(f"Could not open MDT dataset at {mdt_path}")
+            raise FileNotFoundError(f"No se pudo abrir el dataset MDT en {mdt_path}")
         
         mdt_band = mdt_dataset.GetRasterBand(1)
         self.nodataMdt = mdt_band.GetNoDataValue()
@@ -54,7 +57,7 @@ class BasinCalculatorRefactored:
 
         flowdirs_dataset = gdal.Open(flowdirs_path, gdal.GA_ReadOnly)
         if flowdirs_dataset is None:
-            raise FileNotFoundError(f"Could not open FLOWDIRS dataset at {flowdirs_path}")
+            raise FileNotFoundError(f"No se pudo abrir el dataset FLOWDIRS en {flowdirs_path}")
         flowdirs_band = flowdirs_dataset.GetRasterBand(1)
         self.nodataDirs = flowdirs_band.GetNoDataValue()
         self.dirs = flowdirs_band.ReadAsArray()
@@ -62,16 +65,16 @@ class BasinCalculatorRefactored:
         self.secondaryLayers = {}
         self.secondaryNodata = {}
         self.secondaryTransforms = {}
-
-        self._open_secondary_layer(os.path.join(self.data_folder, self.layer_mapping["I1ID"]), "I1ID")
-        self._open_secondary_layer(os.path.join(self.data_folder, self.layer_mapping["P0"]), "P0")
+        
+        self._open_secondary_layer(self.local_layer_paths["I1ID"], "I1ID")
+        self._open_secondary_layer(self.local_layer_paths["P0"], "P0")
 
         self.rainFiles = {
             2: "RAIN_2", 5: "RAIN_5", 10: "RAIN_10",
             25: "RAIN_25", 100: "RAIN_100", 500: "RAIN_500",
         }
         for returnPeriod, rainFileKey in self.rainFiles.items():
-            self._open_secondary_layer(os.path.join(self.data_folder, self.layer_mapping[rainFileKey]), returnPeriod)
+            self._open_secondary_layer(self.local_layer_paths[rainFileKey], returnPeriod)
 
         self._resetValues()
 
