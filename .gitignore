@@ -86,15 +86,6 @@ Thumbs.db
 temp/
 tmp/
 
-# Archivos de datos grandes
-*.tif
-*.tiff
-*.geotiff
-# Ignorar archivos .gpkg grandes, pero permitir los esenciales
-*.gpkg
-!data/regiones.gpkg
-!data/demarcaciones_hidrograficas.gpkg  
-!data/red10km.gpkg
 
 # Logs
 *.log
