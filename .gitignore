@@ -119,3 +119,14 @@ secrets.toml
 
 # Streamlit secrets
 .streamlit/secrets.toml
+
+# Ignorar archivos TIF temporales en la raíz del proyecto
+/CORINE_VISU.tif
+/CORINE_visual.tif
+/SP_CV_modified.tif
+/SP_CV_modified_modified.tif
+/elevation.tif
+/output_COP30.tif
+
+# Ignorar carpetas de backup
+archivos_grandes_backup/
