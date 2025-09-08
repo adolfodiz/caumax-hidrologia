@@ -6,14 +6,30 @@ from shapely.geometry import shape, Point
 import json
 from pyproj import CRS, Transformer
 
-# --- ¡IMPORTANTE! ---
-# Importamos el diccionario LAYER_MAPPING desde app.py.
-# Este es ahora nuestra ÚNICA "fuente de la verdad" para las rutas de los datos.
-from app import LAYER_MAPPING
-
-# --- ELIMINADO ---
-# Ya no definimos DATA_FOLDER ni un LAYER_MAPPING local aquí.
-# Esto asegura que siempre usemos las URLs de la nube definidas en app.py.
+# --- ¡AQUÍ ESTÁ EL CAMBIO CLAVE! ---
+# El diccionario LAYER_MAPPING ahora VIVE en este archivo.
+# Esta es la única "fuente de la verdad" para las rutas de los datos.
+LAYER_MAPPING = {
+    "BASINS": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/demarcaciones_hidrograficas.gpkg",
+    "RIVERS": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/red10km.gpkg",
+    "ZONES": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/regiones.gpkg",
+    "MDT": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/mdt.tif",
+    "FLOWDIRS": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/dir.tif",
+    "I1ID": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/i1id.tif",
+    "P0": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/p0.tif",
+    "RAIN_2": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/t2.tif",
+    "RAIN_5": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/t5.tif",
+    "RAIN_10": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/t10.tif",
+    "RAIN_25": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/t25.tif",
+    "RAIN_100": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/t100.tif",
+    "RAIN_500": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/t500.tif",
+    "FLOW_2": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/q2.tif",
+    "FLOW_5": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/q5.tif",
+    "FLOW_10": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/q10.tif",
+    "FLOW_25": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/q25.tif",
+    "FLOW_100": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/q100.tif",
+    "FLOW_500": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/q500.tif",
+}
 
 
 def get_layer_path(layer_key):

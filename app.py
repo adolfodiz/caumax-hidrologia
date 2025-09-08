@@ -26,7 +26,7 @@ from pathlib import Path
 import rasterio
 
 # Importar lógica de negocio y las nuevas pestañas GIS
-from core_logic.gis_utils import get_raster_value_at_point, get_vector_feature_at_point, get_layer_path, load_geojson_from_gpkg
+from core_logic.gis_utils import get_raster_value_at_point, get_vector_feature_at_point, get_layer_path, load_geojson_from_gpkg, LAYER_MAPPING
 from core_logic.basin_calculator_refactored import BasinCalculatorRefactored
 from core_logic.hydrology_methods import (
     calculate_rational_method, calculate_gev_fit, calculate_tcev_fit, 
@@ -54,27 +54,7 @@ transformer_utm30n_to_wgs84 = Transformer.from_crs(crs_utm30n, crs_wgs84, always
 
 # --- Rutas y Mapeo de Capas ---
 # DATA_FOLDER = os.path.join(os.path.dirname(__file__), 'data')
-LAYER_MAPPING = {
-    "BASINS": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/demarcaciones_hidrograficas.gpkg", 
-    "RIVERS": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/red10km.gpkg",
-    "ZONES": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/regiones.gpkg", 
-    "MDT": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/mdt.tif", 
-    "FLOWDIRS": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/dir.tif",
-    "I1ID": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/i1id.tif", 
-    "P0": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/p0.tif", 
-    "RAIN_2": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/t2.tif", 
-    "RAIN_5": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/t5.tif",
-    "RAIN_10": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/t10.tif", 
-    "RAIN_25": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/t25.tif", 
-    "RAIN_100": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/t100.tif",
-    "RAIN_500": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/t500.tif", 
-    "FLOW_2": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/q2.tif", 
-    "FLOW_5": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/q5.tif",
-    "FLOW_10": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/q10.tif", 
-    "FLOW_25": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/q25.tif", 
-    "FLOW_100": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/q100.tif",
-    "FLOW_500": "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/q500.tif",
-}
+
 STANDARD_RETURN_PERIODS = [2, 5, 10, 25, 100, 500]
 EXTRAPOLATION_PERIODS = [1000, 5000, 10000] # <-- ADICIÓN
 TCEV_REGIONS = [72, 73, 84, 821, 822]
