@@ -175,3 +175,36 @@ def get_vector_feature_at_point(vector_path_url, point_utm):
             return None
     except Exception:
         return None
+
+# --- INICIO: NUEVA FUNCIÓN DE DESCARGA FORZADA ---
+# Usamos un decorador de caché diferente para esta función para evitar conflictos
+@cache_resource(ttl=3600)
+def force_download_to_local_path(url):
+    """
+    Toma una URL, SIEMPRE descarga el archivo a un directorio temporal
+    y devuelve la RUTA LOCAL. Esta función es para las librerías
+    antiguas que no pueden leer URLs directamente.
+    """
+    try:
+        filename = os.path.basename(url)
+        local_path = os.path.join(_temp_dir.name, filename)
+
+        # Si el archivo ya existe, lo usamos.
+        if os.path.exists(local_path) and os.path.getsize(local_path) > 0:
+            return local_path
+
+        # Si no, lo descargamos.
+        with requests.get(url, stream=True) as r:
+            r.raise_for_status()
+            with open(local_path, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    f.write(chunk)
+        
+        if os.path.getsize(local_path) == 0:
+            return None
+
+        return local_path
+    except Exception as e:
+        print(f"Error crítico durante la descarga forzada del archivo {url}: {e}")
+        return None
+# --- FIN: NUEVA FUNCIÓN ---

@@ -1,7 +1,9 @@
 # core_logic/basin_calculator_refactored.py
 
 import numpy as np
-from .gis_utils import get_local_path_from_url, LAYER_MAPPING
+# --- INICIO: CAMBIO 1 - Importamos la nueva función ---
+from .gis_utils import force_download_to_local_path, LAYER_MAPPING
+# --- FIN: CAMBIO 1 ---
 try:
     from osgeo import gdal, osr, ogr
     GDAL_AVAILABLE = True
@@ -28,17 +30,15 @@ class BasinCalculatorRefactored:
         gdal.UseExceptions()
         gdal.AllRegister()
 
-        # --- ¡AQUÍ ESTÁ LA LÓGICA CORREGIDA Y ÚNICA! ---
-        # 1. Usamos el diccionario de URLs que viene de la app.
-        # 2. Creamos un nuevo diccionario interno que contiene las RUTAS LOCALES
-        #    a los archivos descargados y cacheados.
+        # --- INICIO: CAMBIO 2 - Usamos la nueva función para forzar la descarga ---
+        # Esta clase necesita rutas locales, por lo que usamos la función de descarga forzada.
         self.local_layer_paths = {
-            key: get_local_path_from_url(url)
+            key: force_download_to_local_path(url)
             for key, url in layer_mapping_from_app.items()
+            if url.endswith('.tif') # Solo descargamos los TIFs que esta clase necesita
         }
+        # --- FIN: CAMBIO 2 ---
 
-
-        # 3. Ahora, usamos este diccionario de rutas locales para abrir los archivos.
         mdt_path = self.local_layer_paths["MDT"]
         flowdirs_path = self.local_layer_paths["FLOWDIRS"]
 
