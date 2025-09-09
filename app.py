@@ -817,13 +817,15 @@ def run_calculation_in_thread(results_container, x_utm, y_utm, return_period):
         results_container['error'] = f"Error fatal en el cálculo: {e}\n{traceback.format_exc()}"
 
 
-# --- PASO 2: Lógica de la Pestaña para gestionar el hilo y mostrar los resultados ---
+# --- PASO 2: Lógica de la Pestaña para gestionar el hilo (NO BLOQUEANTE) ---
 with tab1:
+    # Si se pulsa el botón, se inicia el proceso
     if st.session_state.calculation_triggered:
-        # st.session_state.pop('results', None) # <-- ¡PROBLEMA! Borra la variable
-        st.session_state.results = None # <-- ¡SOLUCIÓN! La resetea a None, pero no la borra
+        # Limpiamos resultados anteriores e inicializamos el contenedor
+        st.session_state.results = None
         st.session_state.calculation_results = {}
         
+        # Creamos y arrancamos el hilo
         thread = threading.Thread(
             target=run_calculation_in_thread,
             args=(
@@ -835,39 +837,50 @@ with tab1:
         )
         thread.start()
         
+        # Guardamos el objeto del hilo para poder comprobar si sigue vivo
+        st.session_state.calculation_thread = thread
         st.session_state.calculation_running = True
         st.session_state.calculation_triggered = False
         st.rerun()
 
+    # Mientras el cálculo está en marcha
     if st.session_state.get('calculation_running'):
-        with st.spinner("Calculando cuenca y realizando doble ajuste de curva..."):
-            while 'final_results' not in st.session_state.calculation_results and 'error' not in st.session_state.calculation_results:
-                time.sleep(1)
-
-        results_container = st.session_state.calculation_results
-        
-        if 'error' in results_container:
-            st.error(results_container['error'])
-        else:
-            st.session_state.results = results_container['final_results']
-            st.session_state.basin_geojson = results_container.get('basin_geojson_str')
-            st.session_state.max_dist_point_wgs84 = st.session_state.results.get('max_dist_point_wgs84')
-            st.session_state.fit_bounds_on_next_run = st.session_state.results.get('fit_bounds_on_next_run')
+        # Comprobamos si el hilo ha terminado
+        if not st.session_state.calculation_thread.is_alive():
+            # El hilo ha terminado, ahora procesamos los resultados
+            results_container = st.session_state.calculation_results
             
-            basin_calc = results_container.get('basin_calc_obj')
-            outlet_coords = results_container.get('outlet_coords')
-            if basin_calc and outlet_coords:
-                st.session_state.shapefile_zip_io, st.session_state.rivers_zip_io, st.session_state.dem_zip_io, st.session_state.point_zip_io = create_all_download_zips(basin_calc, outlet_coords)
+            if 'error' in results_container:
+                st.error(results_container['error'])
+            elif 'final_results' in results_container:
+                # Éxito, actualizamos el estado de la sesión con los resultados
+                st.session_state.results = results_container['final_results']
+                st.session_state.basin_geojson = results_container.get('basin_geojson_str')
+                st.session_state.max_dist_point_wgs84 = st.session_state.results.get('max_dist_point_wgs84')
+                st.session_state.fit_bounds_on_next_run = st.session_state.results.get('fit_bounds_on_next_run')
+                
+                basin_calc = results_container.get('basin_calc_obj')
+                outlet_coords = results_container.get('outlet_coords')
+                if basin_calc and outlet_coords:
+                    st.session_state.shapefile_zip_io, st.session_state.rivers_zip_io, st.session_state.dem_zip_io, st.session_state.point_zip_io = create_all_download_zips(basin_calc, outlet_coords)
 
-            st.session_state.last_calculated_x = st.session_state.current_x_utm
-            st.session_state.last_calculated_y = st.session_state.current_y_utm
-            st.session_state.last_calculated_rp = st.session_state.current_return_period
-        
-        st.session_state.calculation_running = False
-        st.rerun()
-
+                st.session_state.last_calculated_x = st.session_state.current_x_utm
+                st.session_state.last_calculated_y = st.session_state.current_y_utm
+                st.session_state.last_calculated_rp = st.session_state.current_return_period
+            
+            # Marcamos el cálculo como finalizado y hacemos un último rerun para mostrar los resultados
+            st.session_state.calculation_running = False
+            st.rerun()
+        else:
+            # El hilo sigue vivo, mostramos un spinner y dejamos que el script termine.
+            # Streamlit re-ejecutará el script automáticamente, volviendo a comprobar.
+            st.spinner("Calculando cuenca y realizando doble ajuste de curva...")
+            # ¡No hay bucle while! ¡No hay time.sleep!
+    
+    # Si ya tenemos resultados, los mostramos
     if st.session_state.get('results'):
         results = st.session_state.results
+        
         st.subheader("Resultados Finales")
         st.write(f"**Para T={st.session_state.current_return_period} años: Lluvia máxima diaria: {results.get('rain_user_rp', 'N/A')} mm | "
                  f"Caudal: {results.get('flow_user_rp', 'N/A')} m³/s | "
@@ -889,7 +902,7 @@ with tab1:
             if st.session_state.get("dem_zip_io"): st.download_button("📥 DEM (.zip)", st.session_state.dem_zip_io, f"mdt_{st.session_state.current_x_utm}_{st.session_state.current_y_utm}.zip", "application/zip", use_container_width=True)
         with dl_col4:
             if st.session_state.get("point_zip_io"): st.download_button("📥 Punto (.zip)", st.session_state.point_zip_io, f"punto_{st.session_state.current_x_utm}_{st.session_state.current_y_utm}.zip", "application/zip", use_container_width=True)
-       
+            
         if 'derived_quantiles_table' in results and not results['derived_quantiles_table'].empty:
             st.subheader("Tabla de Cuantiles Derivados (incluye extrapolación)")
             st.dataframe(results['derived_quantiles_table'].style.format(formatter={"Periodo (años)": "{:.2f}", "Lluvia P24máx (mm)": "{:.2f}", "Caudal (m³/s)": "{:.2f}"}), use_container_width=True)
@@ -972,7 +985,10 @@ with tab1:
             st.divider()
             with st.expander("ℹ️ Ver explicación teórica de las variables"):
                 st.markdown(""" (Explicación teórica original) """)
-    else:
+    # else:
+    #     st.info("Seleccione un punto en el mapa y haga clic en 'Calcular Caudal' en el panel izquierdo.")
+    # Si no hay cálculo en marcha ni resultados, mostramos el mensaje inicial
+    elif not st.session_state.get('calculation_running'):
         st.info("Seleccione un punto en el mapa y haga clic en 'Calcular Caudal' en el panel izquierdo.")
 
 with tab2: render_dem25_tab()
