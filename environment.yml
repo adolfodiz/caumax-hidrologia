@@ -28,4 +28,6 @@ dependencies:
     - streamlit==1.40.2
     - streamlit-folium==0.17.4
     - pydeck>=0.8.0
-    # - stripe==10.5.0 # Si necesitas stripe, descomenta esta línea
+    - stripe==10.5.0 # Si necesitas stripe, descomenta esta línea
+
+# Comentario para forzar la actualización del caché en Render - v2
