@@ -59,19 +59,6 @@ STANDARD_RETURN_PERIODS = [2, 5, 10, 25, 100, 500]
 EXTRAPOLATION_PERIODS = [1000, 5000, 10000] # <-- ADICIÓN
 TCEV_REGIONS = [72, 73, 84, 821, 822]
 
-# --- Funciones en Caché y Auxiliares (CÓDIGO ORIGINAL INTOCADO) ---
-""" @st.cache_data
-def get_cached_geojson_layer(layer_key):
-    try:
-        # 1. Obtiene la URL
-        gpkg_url = get_layer_path(layer_key)
-        # 2. Obtiene la RUTA LOCAL (descargada y cacheada)
-        local_gpkg_path = get_local_path_from_url(gpkg_url)
-        # 3. Pasa la ruta local a la función que lee el archivo
-        return load_geojson_from_gpkg(local_gpkg_path)
-    except Exception as e:
-        st.error(f"Error al cargar la capa {layer_key}: {e}")
-        return None """
 
 # Añadimos un parámetro "dummy" para forzar al caché a invalidarse.
 # Cambia el número (ej. a _v=2) si necesitas forzarlo de nuevo en el futuro.
@@ -80,26 +67,26 @@ def get_cached_geojson_layer(layer_key, _v=1):
     try:
         gpkg_url = get_layer_path(layer_key)
         if not gpkg_url:
-            st.error(f"No se encontró la URL para la capa '{layer_key}' en LAYER_MAPPING.")
+            print(f"ERROR: No se encontró la URL para la capa '{layer_key}' en LAYER_MAPPING.")
             return None
 
         local_gpkg_path = get_local_path_from_url(gpkg_url)
         if not local_gpkg_path:
-            st.error(f"Falló la descarga del archivo para la capa '{layer_key}' desde la URL: {gpkg_url}")
+            print(f"ERROR: Falló la descarga del archivo para la capa '{layer_key}' desde la URL: {gpkg_url}")
             return None
 
         geojson_data = load_geojson_from_gpkg(local_gpkg_path)
         if not geojson_data:
-            st.error(f"Falló el procesamiento del archivo local '{local_gpkg_path}' para la capa '{layer_key}'.")
+            print(f"ERROR: Falló el procesamiento del archivo local '{local_gpkg_path}' para la capa '{layer_key}'.")
             return None
             
         return geojson_data
     except Exception as e:
-        # ¡EL CAMBIO MÁS IMPORTANTE!
-        # st.exception() mostrará el error completo y la traza en la propia app.
-        st.exception(e)
-        # Y 'raise' hará que la app se caiga y muestre el error en los logs de Render.
-        raise e
+        # --- ¡AQUÍ ESTÁ EL CAMBIO! ---
+        # Ahora, si hay un error, lo imprimimos en los logs del servidor para nosotros,
+        # pero no mostramos nada al usuario. La app simplemente no dibujará la capa.
+        print(f"Error crítico al cargar la capa {layer_key}: {e}")
+        return None
 
 def create_all_download_zips(basin_calculator, outlet_coords):
     if not basin_calculator.basinGeometryUTM:
@@ -117,7 +104,9 @@ def create_all_download_zips(basin_calculator, outlet_coords):
         basin_zip_io.seek(0)
         rivers_zip_io = None
         try:
-            rivers_path = get_local_path_from_url(get_layer_path("RIVERS"))
+            # --- ¡CORRECCIÓN AQUÍ! ---
+            rivers_url = get_layer_path("RIVERS")
+            rivers_path = get_local_path_from_url(rivers_url)
             rios_recortados_path = os.path.join(tmpdir, "rios_recortados.shp")
             options = gdal.VectorTranslateOptions(format='ESRI Shapefile', clipSrc=basin_shp_path)
             gdal.VectorTranslate(rios_recortados_path, rivers_path, options=options)
@@ -131,7 +120,9 @@ def create_all_download_zips(basin_calculator, outlet_coords):
         except Exception: pass
         dem_zip_io = None
         try:
-            dem_path = get_local_path_from_url(get_layer_path("MDT"))
+            # --- ¡CORRECCIÓN AQUÍ! ---
+            dem_url = get_layer_path("MDT")
+            dem_path = get_local_path_from_url(dem_url)
             dem_tif_path_out = os.path.join(tmpdir, "mdt_recortado.tif")
             options_dem = gdal.WarpOptions(format='GTiff', cutlineDSName=basin_shp_path, cropToCutline=True, dstNodata=-9999)
             gdal.Warp(dem_tif_path_out, dem_path, options=options_dem)
@@ -141,6 +132,7 @@ def create_all_download_zips(basin_calculator, outlet_coords):
                     zf.write(dem_tif_path_out, arcname="mdt_cuenca.tif")
                 dem_zip_io.seek(0)
         except Exception as e: st.error(f"Error técnico al recortar el DEM: {e}")
+        # ... (el resto de la función se queda igual)
         point_zip_io = None
         try:
             point_shp_path = os.path.join(tmpdir, "punto_desague.shp")
@@ -425,7 +417,7 @@ with tab1:
                 results['region_info'] = {k: region_props.get(k) for k in ['tmco', 'cp0t2', 'cp0t5', 'cp0t10', 'cp0t25', 'cp0t100', 'cp0t500', 'betamedio', 'IC50', 'IC67', 'IC90']}
                 results['region_info']['id'] = region_id
 
-                basin_calc = BasinCalculatorRefactored(DATA_FOLDER, LAYER_MAPPING)
+                basin_calc = BasinCalculatorRefactored(None, LAYER_MAPPING)
                 basin_calc.calculate((x_utm, y_utm))
                 area_km2 = basin_calc.area / 1_000_000
                 results['basin_properties'] = {"area_km2": round(area_km2, 3), "concentration_time_h": round(basin_calc.concentrationTime, 3), "max_distance_m": round(basin_calc.maxDistance, 0), "max_h_msnm": round(basin_calc.maxH, 3), "min_h_msnm": round(basin_calc.minH, 3)}
