@@ -33,41 +33,31 @@ LAYER_MAPPING = {
 
 _temp_dir = tempfile.TemporaryDirectory()
 
-# @cache_resource(ttl=3600)
-# def get_local_path_from_url(url):
-#     """
-#     Toma una URL, descarga el archivo a un directorio temporal persistente
-#     y devuelve la RUTA LOCAL a ese archivo. Usa el cache de Streamlit
-#     para asegurar que cada archivo solo se descarga una vez por sesión.
-#     """
-#     try:
-#         filename = os.path.basename(url)
-#         local_path = os.path.join(_temp_dir.name, filename)
-# 
-#         if os.path.exists(local_path) and os.path.getsize(local_path) > 0:
-#             print(f"DEBUG: Usando archivo cacheado '{filename}' de {os.path.getsize(local_path)} bytes.")
-#             return local_path
-# 
-#         print(f"DEBUG: Descargando archivo '{filename}' desde {url}...")
-#         with requests.get(url, stream=True) as r:
-#             r.raise_for_status()
-#             with open(local_path, 'wb') as f:
-#                 for chunk in r.iter_content(chunk_size=8192):
-#                     f.write(chunk)
-#         
-#         # --- ¡AQUÍ ESTÁ LA LÍNEA DE DEPURACIÓN CLAVE! ---
-#         file_size = os.path.getsize(local_path)
-#         print(f"DEBUG: Descarga completa. Tamaño final de '{filename}' en disco: {file_size} bytes.")
-# 
-#         # Si el archivo está vacío, es un error.
-#         if file_size == 0:
-#             print(f"ERROR: El archivo descargado '{filename}' está vacío (0 bytes).")
-#             return None
-# 
-#         return local_path
-#     except Exception as e:
-#         print(f"Error crítico durante la descarga o verificación del archivo {url}: {e}")
-#         return None
+@cache_resource(ttl=3600)
+def get_local_path_from_url(url):
+    try:
+        # Si la URL es de un raster COG, devolvemos la URL para lectura directa.
+        if url.endswith(('_COG.tif', '_cog.tif', '.tif')) and url.startswith('http'):
+            return url
+
+        # Para otros archivos (gpkg, zip), sí los descargamos.
+        filename = os.path.basename(url)
+        local_path = os.path.join(_temp_dir.name, filename)
+
+        if os.path.exists(local_path) and os.path.getsize(local_path) > 0:
+            return local_path
+
+        with requests.get(url, stream=True) as r:
+            r.raise_for_status()
+            with open(local_path, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    f.write(chunk)
+        
+        if os.path.getsize(local_path) == 0: return None
+        return local_path
+    except Exception as e:
+        print(f"Error crítico durante la gestión de la ruta/URL {url}: {e}")
+        return None
 
 # Esta función ya no es necesaria para los rásters, pero la mantenemos
 # por si la usan los archivos vectoriales (gpkg).
