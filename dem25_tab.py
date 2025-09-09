@@ -442,12 +442,17 @@ def render_dem25_tab():
     st.subheader("(from NASA’s Earth Observing System Data and Information System -EOSDIS)")
     st.info("Esta herramienta identifica las hojas del MTN25 y genera un DEM recortado para la cuenca (con buffer de 5km) o para un área dibujada manualmente.")
 
-    if 'basin_geojson' not in st.session_state:
+    # --- CAMBIO 1: Comprobación más segura al inicio ---
+    # Usamos .get() para evitar errores si 'basin_geojson' no existe o es None
+    if not st.session_state.get('basin_geojson'):
         st.warning("⬅️ Por favor, primero calcule una cuenca en la Pestaña 1.")
         st.stop()
 
     if st.button("🗺️ Analizar Hojas y DEM para la Cuenca Actual", use_container_width=True):
         results = procesar_datos_cuenca(st.session_state.basin_geojson)
+        
+        # --- CAMBIO 2: Lógica de control de flujo corregida ---
+        # Solo si los resultados son VÁLIDOS, actualizamos el estado y forzamos un rerun.
         if results:
             st.session_state.cuenca_results = results
             st.session_state.processed_basin_id = st.session_state.basin_geojson
@@ -456,20 +461,26 @@ def render_dem25_tab():
             st.session_state.pop('user_drawn_geojson', None)
             st.session_state.pop('polygon_error_message', None)
             st.session_state.pop('hidro_results_externo', None)
+            st.session_state.show_dem25_content = True # <-- Se activa solo en caso de éxito
+            st.rerun()
         else:
-            st.error("No se pudo procesar la cuenca.")
-        st.session_state.show_dem25_content = True
-        st.rerun()
+            # Si hay un error, lo mostramos y nos aseguramos de que el contenido no se muestre.
+            st.error("No se pudo procesar la cuenca. Revisa los mensajes de error si los hubiera.")
+            st.session_state.show_dem25_content = False # <-- Se desactiva en caso de error
 
-    if not st.session_state.get('show_dem25_content'):
+    # --- CAMBIO 3: Doble comprobación antes de renderizar ---
+    # Nos aseguramos de que tanto la bandera para mostrar como los datos existan.
+    if not st.session_state.get('show_dem25_content') or not st.session_state.get('cuenca_results'):
         st.stop()
     
-    # --- El resto de la función render_dem25_tab sigue aquí ---
-    # Esta parte del código, que muestra la interfaz de usuario, no necesita cambios.
+    # A partir de aquí, el código puede asumir de forma segura que 'cuenca_results' existe.
     st.subheader("Mapa de Situación")
     m = folium.Map(tiles="CartoDB positron")
     folium.TileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', attr='Esri', name='Imágenes Satélite').add_to(m)
+    
+    # Ahora esta línea es segura
     cuenca_results = st.session_state.cuenca_results
+    
     folium.GeoJson(cuenca_results['cuenca_gdf'], name="Cuenca", style_function=lambda x: {'color': 'white', 'weight': 2.5}).add_to(m)
     buffer_layer = folium.GeoJson(cuenca_results['buffer_gdf'], name="Buffer Cuenca (5km)", style_function=lambda x: {'color': 'tomato', 'fillOpacity': 0.1}).add_to(m)
     folium.GeoJson(cuenca_results['hojas'], name="Hojas (Cuenca)", style_function=lambda x: {'color': '#ffc107', 'weight': 2, 'fillOpacity': 0.4}).add_to(m)

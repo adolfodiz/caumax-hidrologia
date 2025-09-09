@@ -296,8 +296,6 @@ if 'lon_wgs84' not in st.session_state:
     st.session_state.x_utm = round(x_utm_init, 6)
     st.session_state.y_utm = round(y_utm_init, 6)
     
-    # --- ¡AQUÍ ESTÁ LA CORRECCIÓN CLAVE! ---
-    # Inicializamos todas las variables relacionadas con los cálculos a None o False.
     st.session_state.results = None
     st.session_state.calculation_triggered = False
     st.session_state.calculation_running = False
@@ -317,6 +315,25 @@ if 'lon_wgs84' not in st.session_state:
     st.session_state.point_zip_io = None
     st.session_state.last_processed_click = None
     st.session_state.final_delineation_point_wgs84 = None
+
+    # --- INICIO: NUEVAS LÍNEAS PARA INICIALIZACIÓN ROBUSTA ---
+    # Variables para la Pestaña 2 (dem25_tab)
+    st.session_state.show_dem25_content = False
+    st.session_state.cuenca_results = None
+    st.session_state.poligono_results = None
+    st.session_state.user_drawn_geojson = None
+    st.session_state.hidro_results_externo = None
+    st.session_state.drawing_mode_active = False
+    st.session_state.outlet_coords = None
+    st.session_state.polygon_error_message = None
+    st.session_state.precalculated_acc = None
+
+    # Variables para la Pestaña 3 (perfil_terreno_tab)
+    st.session_state.perfil_data = None
+    st.session_state.active_profile_line = None
+    st.session_state.profile_source = 'Ninguna'
+    st.session_state.profile_map_key = 0
+    # --- FIN: NUEVAS LÍNEAS ---
 
 
 def update_coords_from_wgs84():
