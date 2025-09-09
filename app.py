@@ -286,13 +286,23 @@ def export_geometry_to_zip(geometry, filename_base, crs_wkt):
 
 
 
+# --- INICIALIZACIÓN DEL ESTADO DE LA SESIÓN ---
+# Este bloque se ejecuta solo una vez, la primera vez que un usuario abre la app.
+# Aquí nos aseguramos de que TODAS las variables que vamos a usar existen.
 if 'lon_wgs84' not in st.session_state:
     st.session_state.lon_wgs84 = -3.703790
     st.session_state.lat_wgs84 = 40.416775
     x_utm_init, y_utm_init = transformer_wgs84_to_utm30n.transform(st.session_state.lon_wgs84, st.session_state.lat_wgs84)
-    st.session_state.x_utm, st.session_state.y_utm = round(x_utm_init, 3), round(y_utm_init, 3)
-    st.session_state.calculation_triggered = False
+    st.session_state.x_utm = round(x_utm_init, 6)
+    st.session_state.y_utm = round(y_utm_init, 6)
+    
+    # --- ¡AQUÍ ESTÁ LA CORRECCIÓN CLAVE! ---
+    # Inicializamos todas las variables relacionadas con los cálculos a None o False.
     st.session_state.results = None
+    st.session_state.calculation_triggered = False
+    st.session_state.calculation_running = False
+    st.session_state.calculation_results = {}
+    
     st.session_state.basin_geojson = None
     st.session_state.max_dist_point_wgs84 = None
     st.session_state.last_calculated_x = None
@@ -304,13 +314,9 @@ if 'lon_wgs84' not in st.session_state:
     st.session_state.fit_bounds_on_next_run = None
     st.session_state.rivers_zip_io = None
     st.session_state.dem_zip_io = None
+    st.session_state.point_zip_io = None
     st.session_state.last_processed_click = None
     st.session_state.final_delineation_point_wgs84 = None
-    # --- INICIO: LÍNEAS ELIMINADAS ---
-    # st.session_state.main_channel_zip_io = None
-    # st.session_state.main_channel_geojson = None
-    # st.session_state.profile_csv_str = None
-    # --- FIN: LÍNEAS ELIMINADAS ---
 
 
 def update_coords_from_wgs84():
@@ -797,7 +803,8 @@ def run_calculation_in_thread(results_container, x_utm, y_utm, return_period):
 # --- PASO 2: Lógica de la Pestaña para gestionar el hilo y mostrar los resultados ---
 with tab1:
     if st.session_state.calculation_triggered:
-        st.session_state.pop('results', None)
+        # st.session_state.pop('results', None) # <-- ¡PROBLEMA! Borra la variable
+        st.session_state.results = None # <-- ¡SOLUCIÓN! La resetea a None, pero no la borra
         st.session_state.calculation_results = {}
         
         thread = threading.Thread(
