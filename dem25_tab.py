@@ -302,74 +302,98 @@ def realizar_analisis_hidrologico_directo(dem_bytes, outlet_coords_wgs84, umbral
 
 @st.cache_data(show_spinner="Procesando la cuenca + buffer...")
 def procesar_datos_cuenca(basin_geojson_str):
-    # --- ¡AQUÍ ESTÁ LA CORRECCIÓN CLAVE! ---
-    # 1. Descargamos el archivo ZIP y obtenemos su ruta local.
-    local_zip_path = get_local_path_from_url(HOJAS_MTN25_PATH)
-    if not local_zip_path:
-        st.error("No se pudo descargar el archivo de hojas del MTN25 desde la nube.")
-        return None # Devuelve None para detener la ejecución
+    try:
+        # --- ¡AQUÍ ESTÁ LA CORRECCIÓN CLAVE! ---
+        # 1. Descargamos el archivo ZIP y obtenemos su ruta local.
+        local_zip_path = get_local_path_from_url(HOJAS_MTN25_PATH)
+        if not local_zip_path:
+            st.error("No se pudo descargar el archivo de hojas del MTN25 desde la nube.")
+            return None
 
-    # 2. Ahora leemos el archivo desde la RUTA LOCAL, que es 100% fiable.
-    hojas_gdf = gpd.read_file(local_zip_path)
-    
-    # El resto de la función se queda exactamente igual
-    cuenca_gdf = gpd.read_file(basin_geojson_str).set_crs("EPSG:4326")
-    buffer_gdf = gpd.GeoDataFrame(geometry=cuenca_gdf.to_crs("EPSG:25830").buffer(BUFFER_METROS), crs="EPSG:25830")
-    geom_para_interseccion = buffer_gdf.to_crs(hojas_gdf.crs)
-    hojas = gpd.sjoin(hojas_gdf, geom_para_interseccion, how="inner", predicate="intersects").drop_duplicates(subset=['numero'])
-    
-    # ... (el resto de la función no cambia)
-    dem_url = DEM_NACIONAL_PATH # Usamos la URL para la descarga
-    local_dem_path = get_local_path_from_url(dem_url)
-    if not local_dem_path:
-        st.error("No se pudo descargar el DEM nacional desde la nube.")
-        return None
+        # 2. Ahora leemos el archivo desde la RUTA LOCAL.
+        hojas_gdf = gpd.read_file(local_zip_path)
+        
+        cuenca_gdf = gpd.read_file(basin_geojson_str).set_crs("EPSG:4326")
+        buffer_gdf = gpd.GeoDataFrame(geometry=cuenca_gdf.to_crs("EPSG:25830").buffer(BUFFER_METROS), crs="EPSG:25830")
+        geom_para_interseccion = buffer_gdf.to_crs(hojas_gdf.crs)
+        hojas = gpd.sjoin(hojas_gdf, geom_para_interseccion, how="inner", predicate="intersects").drop_duplicates(subset=['numero'])
+        
+        local_dem_path = get_local_path_from_url(DEM_NACIONAL_PATH)
+        if not local_dem_path:
+            st.error("No se pudo descargar el DEM nacional desde la nube.")
+            return None
 
-    with rasterio.open(local_dem_path) as src:
-        geom_recorte_gdf = buffer_gdf.to_crs(src.crs)
-        try:
+        with rasterio.open(local_dem_path) as src:
+            geom_recorte_gdf = buffer_gdf.to_crs(src.crs)
             dem_recortado, trans_recortado = mask(dataset=src, shapes=geom_recorte_gdf.geometry, crop=True, nodata=src.nodata or -32768)
-            meta = src.meta.copy(); meta.update({"driver": "GTiff", "height": dem_recortado.shape[1], "width": dem_recortado.shape[2], "transform": trans_recortado})
+            meta = src.meta.copy()
+            meta.update({"driver": "GTiff", "height": dem_recortado.shape[1], "width": dem_recortado.shape[2], "transform": trans_recortado})
             with io.BytesIO() as buffer:
-                with rasterio.open(buffer, 'w', **meta) as dst: dst.write(dem_recortado)
+                with rasterio.open(buffer, 'w', **meta) as dst:
+                    dst.write(dem_recortado)
                 buffer.seek(0)
                 dem_bytes = buffer.read()
-        except ValueError: dem_bytes, dem_recortado = None, None
-    if dem_bytes is None: return None
-    
-    shp_zip_bytes = export_gdf_to_zip(buffer_gdf, "contorno_cuenca_buffer")
-    return { "cuenca_gdf": cuenca_gdf, "buffer_gdf": buffer_gdf.to_crs("EPSG:4326"), "hojas": hojas, "dem_bytes": dem_bytes, "dem_array": dem_recortado, "shp_zip_bytes": shp_zip_bytes }
+        
+        if dem_bytes is None:
+            st.error("La generación del DEM recortado falló (dem_bytes is None).")
+            return None
+        
+        shp_zip_bytes = export_gdf_to_zip(buffer_gdf, "contorno_cuenca_buffer")
+        return { "cuenca_gdf": cuenca_gdf, "buffer_gdf": buffer_gdf.to_crs("EPSG:4326"), "hojas": hojas, "dem_bytes": dem_bytes, "dem_array": dem_recortado, "shp_zip_bytes": shp_zip_bytes }
+
+    except Exception as e:
+        # --- ¡ESTE ES EL CAMBIO MÁS IMPORTANTE! ---
+        # Si algo falla, mostramos el error completo en la app y en los logs.
+        st.error("Ha ocurrido un error inesperado durante el procesamiento de la cuenca.")
+        st.exception(e) # Muestra la traza de error completa en la app.
+        print(traceback.format_exc()) # Imprime la traza en los logs de Render.
+        return None # Detiene la ejecución.
 
 @st.cache_data(show_spinner="Procesando el polígono dibujado...")
 def procesar_datos_poligono(polygon_geojson_str):
-    poly_gdf = gpd.read_file(polygon_geojson_str).set_crs("EPSG:4326")
-    area_km2 = poly_gdf.to_crs("EPSG:25830").area.iloc[0] / 1_000_000
-    if area_km2 > LIMITE_AREA_KM2: return {"error": f"El área ({area_km2:,.0f} km²) supera los límites de {LIMITE_AREA_KM2:,.0f} km²."}
-    hojas_gdf = gpd.read_file(HOJAS_MTN25_PATH)
-    geom_para_interseccion = poly_gdf.to_crs(hojas_gdf.crs)
-    hojas = gpd.sjoin(hojas_gdf, geom_para_interseccion, how="inner", predicate="intersects").drop_duplicates(subset=['numero'])
-    with rasterio.open(DEM_NACIONAL_PATH) as src:
-        geom_recorte_gdf = poly_gdf.to_crs(src.crs)
-        try:
+    try:
+        poly_gdf = gpd.read_file(polygon_geojson_str).set_crs("EPSG:4326")
+        area_km2 = poly_gdf.to_crs("EPSG:25830").area.iloc[0] / 1_000_000
+        if area_km2 > LIMITE_AREA_KM2:
+            return {"error": f"El área ({area_km2:,.0f} km²) supera los límites de {LIMITE_AREA_KM2:,.0f} km²."}
+        
+        local_zip_path = get_local_path_from_url(HOJAS_MTN25_PATH)
+        if not local_zip_path:
+            st.error("No se pudo descargar el archivo de hojas del MTN25 desde la nube.")
+            return None
+        hojas_gdf = gpd.read_file(local_zip_path)
+        
+        geom_para_interseccion = poly_gdf.to_crs(hojas_gdf.crs)
+        hojas = gpd.sjoin(hojas_gdf, geom_para_interseccion, how="inner", predicate="intersects").drop_duplicates(subset=['numero'])
+        
+        local_dem_path = get_local_path_from_url(DEM_NACIONAL_PATH)
+        if not local_dem_path:
+            st.error("No se pudo descargar el DEM nacional desde la nube.")
+            return None
+
+        with rasterio.open(local_dem_path) as src:
+            geom_recorte_gdf = poly_gdf.to_crs(src.crs)
             dem_recortado, trans_recortado = mask(dataset=src, shapes=geom_recorte_gdf.geometry, crop=True, nodata=src.nodata or -32768)
-            meta = src.meta.copy(); meta.update({"driver": "GTiff", "height": dem_recortado.shape[1], "width": dem_recortado.shape[2], "transform": trans_recortado})
+            meta = src.meta.copy()
+            meta.update({"driver": "GTiff", "height": dem_recortado.shape[1], "width": dem_recortado.shape[2], "transform": trans_recortado})
             with io.BytesIO() as buffer:
-                with rasterio.open(buffer, 'w', **meta) as dst: dst.write(dem_recortado)
+                with rasterio.open(buffer, 'w', **meta) as dst:
+                    dst.write(dem_recortado)
                 buffer.seek(0)
                 dem_bytes = buffer.read()
-        except ValueError: dem_bytes, dem_recortado = None, None
-    if dem_bytes is None: return None
-    with tempfile.TemporaryDirectory() as tmpdir:
-        shp_path = os.path.join(tmpdir, "contorno_poligono_manual.shp")
-        poly_gdf.to_file(shp_path, driver='ESRI Shapefile', encoding='utf-8')
-        zip_io = io.BytesIO()
-        with zipfile.ZipFile(zip_io, 'w', zipfile.ZIP_DEFLATED) as zf:
-            for root, _, files in os.walk(tmpdir):
-                for file in files:
-                    if file.startswith("contorno_poligono_manual"): zf.write(os.path.join(root, file), arcname=file)
-        zip_io.seek(0)
-        shp_zip_bytes = zip_io.read()
-    return { "poligono_gdf": poly_gdf, "hojas": hojas, "dem_bytes": dem_bytes, "dem_array": dem_recortado, "shp_zip_bytes": shp_zip_bytes, "area_km2": area_km2 }
+
+        if dem_bytes is None:
+            st.error("La generación del DEM recortado para el polígono falló.")
+            return None
+            
+        shp_zip_bytes = export_gdf_to_zip(poly_gdf, "contorno_poligono_manual")
+        return { "poligono_gdf": poly_gdf, "hojas": hojas, "dem_bytes": dem_bytes, "dem_array": dem_recortado, "shp_zip_bytes": shp_zip_bytes, "area_km2": area_km2 }
+
+    except Exception as e:
+        st.error("Ha ocurrido un error inesperado durante el procesamiento del polígono.")
+        st.exception(e)
+        print(traceback.format_exc())
+        return None
 
 def export_gdf_to_zip(gdf, filename_base):
     with tempfile.TemporaryDirectory() as tmpdir:
