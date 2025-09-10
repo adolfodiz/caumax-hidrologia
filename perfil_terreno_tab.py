@@ -143,11 +143,15 @@ def render_perfil_terreno_tab():
         data = st.session_state.perfil_data
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.subheader("MDT25 (ETRS89 UTM Zone30N)"); fig, ax = plt.subplots(); plot_array = data['dem_image'][0].astype('float32'); nodata = data['dem_meta'].get('nodata')
-            if nodata is not None: plot_array[plot_array == nodata] = np.nan
-            im = ax.imshow(plot_array, cmap='terrain'); fig.colorbar(im, ax=ax, label='Elevación (m)'); ax.set_axis_off(); st.pyplot(fig)
-            # Descargamos los bytes del DEM recortado, no la URL del DEM nacional
-            st.download_button("📥 Descargar MDT25", raster_to_bytes(data['dem_image'], data['dem_meta']), "mdt25_recortado.tif", "image/tiff", use_container_width=True)
+            if st.session_state.get('perfil_data') and st.session_state.perfil_data.get('dem_image') is not None and st.session_state.perfil_data.get('dem_meta') is not None:
+                data = st.session_state.perfil_data # Asumimos que 'data' se refiere a perfil_data
+                st.subheader("MDT25 (ETRS89 UTM Zone30N)"); fig, ax = plt.subplots(); plot_array = data['dem_image'][0].astype('float32'); nodata = data['dem_meta'].get('nodata')
+                if nodata is not None: plot_array[plot_array == nodata] = np.nan
+                im = ax.imshow(plot_array, cmap='terrain'); fig.colorbar(im, ax=ax, label='Elevación (m)'); ax.set_axis_off(); st.pyplot(fig)
+                # Descargamos los bytes del DEM recortado, no la URL del DEM nacional
+                st.download_button("📥 Descargar MDT25", raster_to_bytes(data['dem_image'], data['dem_meta']), "mdt25_recortado.tif", "image/tiff", use_container_width=True)
+            else:
+                st.info("No hay datos de DEM disponibles para mostrar el perfil. Por favor, genere un perfil primero.")
         with col2:
             st.subheader("CORINE Land Cover"); fig, ax = plt.subplots(); corine_array = data['corine_image'][0]; plot_data = corine_array.astype(float); nodata = data['corine_meta'].get('nodata')
             if nodata is not None: plot_data[plot_data == nodata] = np.nan

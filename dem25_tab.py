@@ -333,7 +333,7 @@ def procesar_datos_cuenca(basin_geojson_str):
             dem_recortado, trans_recortado = mask(dataset=src, shapes=geom_recorte_gdf.geometry, crop=True, nodata=src.nodata or -32768)
             print("LOG: Operación de recorte del DEM finalizada.")
             meta = src.meta.copy()
-            meta.update({"driver": "GTiff", "height": dem_recortado.shape[1], "width": dem_recortado.shape[2], "transform": trans_recortado})
+            meta.update({"driver": "GTiff", "height": dem_recortado.shape[1], "width": dem_recortado.shape[2], "transform": trans_recortado, "compress": "NONE"}) # <-- Añadir "compress": "NONE"
             with io.BytesIO() as buffer:
                 with rasterio.open(buffer, 'w', **meta) as dst:
                     dst.write(dem_recortado)
@@ -378,7 +378,7 @@ def procesar_datos_poligono(polygon_geojson_str):
             geom_recorte_gdf = poly_gdf.to_crs(src.crs)
             dem_recortado, trans_recortado = mask(dataset=src, shapes=geom_recorte_gdf.geometry, crop=True, nodata=src.nodata or -32768)
             meta = src.meta.copy()
-            meta.update({"driver": "GTiff", "height": dem_recortado.shape[1], "width": dem_recortado.shape[2], "transform": trans_recortado})
+            meta.update({"driver": "GTiff", "height": dem_recortado.shape[1], "width": dem_recortado.shape[2], "transform": trans_recortado, "compress": "NONE"}) # <-- Añadir "compress": "NONE"
             with io.BytesIO() as buffer:
                 with rasterio.open(buffer, 'w', **meta) as dst:
                     dst.write(dem_recortado)
@@ -495,8 +495,13 @@ def render_dem25_tab():
             st.error("No se pudo procesar la cuenca. La operación falló o superó el tiempo de espera. Revisa los logs del servidor para más detalles.")
             st.session_state.show_dem25_content = False
 
+    # if not st.session_state.get('show_dem25_content') or not st.session_state.get('cuenca_results'):
+    #     st.stop()
+
     if not st.session_state.get('show_dem25_content') or not st.session_state.get('cuenca_results'):
-        st.stop()
+        st.info("Seleccione un punto en el mapa y haga clic en 'Analizar Hojas y DEM para la Cuenca Actual' para empezar.") # <-- Nueva línea
+        return # <-- Reemplaza st.stop()
+
     
     st.subheader("Mapa de Situación")
     m = folium.Map(tiles="CartoDB positron", zoom_start=10) # Añadido zoom_start para mejor visualización inicial
