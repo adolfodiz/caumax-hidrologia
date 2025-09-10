@@ -30,7 +30,6 @@ import pyflwdir
 from rasterio.mask import mask
 from rasterio import features
 import rasterio
-import requests # Necesario para descargar a MemoryFile en precalcular_acumulacion
 from core_logic.gis_utils import get_local_path_from_url # Necesitamos esta para los GPKG y ZIPs
 
 # ==============================================================================
@@ -43,7 +42,9 @@ HOJAS_MTN25_PATH = "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/caumax-h
 DEM_NACIONAL_PATH = "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/caumax-hidrologia-data/MDT25_peninsula_UTM30N_COG.tif"
 BUFFER_METROS = 5000
 LIMITE_AREA_KM2 = 15000
+# --- ¡¡¡ESTA CONSTANTE FALTABA Y ES LA CAUSA DEL ERROR!!! ---
 AREA_PROCESSING_LIMIT_KM2 = 50000 # Límite para evitar procesar cuencas gigantes en Pestaña 2
+# --- ¡¡¡AHORA SÍ ESTÁ!!! ---
 
 # ==============================================================================
 # SECCIÓN 3: LÓGICA DE ANÁLISIS HIDROLÓGICO
@@ -453,90 +454,130 @@ def render_dem25_tab():
     st.header("Generador de Modelos Digitales del Terreno (MDT25)")
     st.subheader("(from NASA’s Earth Observing System Data and Information System -EOSDIS)")
     
+    # --- INICIO: LLAMADA A LA FUNCIÓN DE PRE-CALENTAMIENTO ---
+    # Esta función ya no es necesaria aquí, ya que los COGs se leen directamente.
+    # La eliminamos para evitar confusiones y posibles descargas innecesarias.
+    # precalentar_cache_archivos_grandes() 
+    # --- FIN ---
+
     st.info("Esta herramienta identifica las hojas del MTN25 y genera un DEM recortado para la cuenca (con buffer de 5km) o para un área dibujada manualmente.")
 
     if not st.session_state.get('basin_geojson'):
         st.warning("⬅️ Por favor, primero calcule una cuenca en la Pestaña 1.")
         st.stop()
 
-    # --- INICIO: Lógica para el botón "Analizar Hojas y DEM para la Cuenca Actual" ---
-    # Usamos un estado para controlar el flujo de la Pestaña 2
-    if 'dem25_processing_stage' not in st.session_state:
-        st.session_state.dem25_processing_stage = 0 # 0: Inicio, 1: DEM recortado, 2: Acumulación calculada, -1: Error
-
-    # Botón principal para iniciar el procesamiento
-    if st.button("🗺️ Analizar Hojas y DEM para la Cuenca Actual", use_container_width=True, key="analyze_dem_button"):
-        # Reiniciamos el estado de procesamiento para asegurar un nuevo cálculo
-        st.session_state.dem25_processing_stage = 0 
-        st.session_state.cuenca_results = None
-        st.session_state.precalculated_acc = None
-        st.session_state.hidro_results_externo = None
-        st.session_state.pop('polygon_error_message', None)
-        st.session_state.show_dem25_content = False
-        st.session_state.outlet_coords = None # Limpiamos el punto de salida al iniciar un nuevo análisis
-        st.rerun() # Forzamos un rerun para iniciar el procesamiento
-
-    # --- Lógica de las etapas de procesamiento ---
-    # Etapa 0: Procesar datos de la cuenca (recorte del DEM)
-    # Solo se activa si el botón fue pulsado O si ya estamos en una etapa de procesamiento
-    if st.session_state.dem25_processing_stage == 0 and st.session_state.get('analyze_dem_button'):
+    if st.button("🗺️ Analizar Hojas y DEM para la Cuenca Actual", use_container_width=True):
         try:
             temp_cuenca_gdf = gpd.read_file(st.session_state.basin_geojson).set_crs("EPSG:4326")
             area_km2 = temp_cuenca_gdf.to_crs("EPSG:25830").area.sum() / 1_000_000
             if area_km2 > AREA_PROCESSING_LIMIT_KM2:
                 st.error(f"El área de la cuenca calculada ({area_km2:,.0f} km²) es demasiado grande. Límite: {AREA_PROCESSING_LIMIT_KM2:,.0f} km².")
-                st.session_state.dem25_processing_stage = -1
                 st.stop() 
         except Exception as e:
             st.error(f"No se pudo verificar el área de la cuenca: {e}")
-            st.session_state.dem25_processing_stage = -1
             st.stop()
 
-        with st.spinner("Etapa 1/2: Recortando DEM nacional para el área de la cuenca..."):
+        with st.spinner("Procesando recorte del DEM... Esta operación puede tardar varios segundos. Por favor, espere."):
             results = procesar_datos_cuenca(st.session_state.basin_geojson)
         
         if results:
             st.session_state.cuenca_results = results
-            st.session_state.dem25_processing_stage = 1 # Avanzar a la siguiente etapa
-            st.rerun() # Forzar rerun para ejecutar la siguiente etapa
+            st.session_state.processed_basin_id = st.session_state.basin_geojson
+            # precalcular_acumulacion ahora recibe los bytes del DEM recortado, no la URL del DEM nacional
+            st.session_state.precalculated_acc = precalcular_acumulacion(results['dem_bytes']) 
+            st.session_state.pop('poligono_results', None)
+            st.session_state.pop('user_drawn_geojson', None)
+            st.session_state.pop('polygon_error_message', None)
+            st.session_state.pop('hidro_results_externo', None)
+            st.session_state.show_dem25_content = True
+            st.rerun()
         else:
-            st.error("Error en la Etapa 1: No se pudo procesar la cuenca. Revisa los logs del servidor.")
-            st.session_state.dem25_processing_stage = -1
-            st.stop()
+            st.error("No se pudo procesar la cuenca. La operación falló o superó el tiempo de espera. Revisa los logs del servidor para más detalles.")
+            st.session_state.show_dem25_content = False
 
-    # Etapa 1: Pre-calcular acumulación (PyFlwdir)
-    if st.session_state.dem25_processing_stage == 1:
-        with st.spinner("Etapa 2/2: Pre-calculando red fluvial para referencia..."):
-            st.session_state.precalculated_acc = precalcular_acumulacion(st.session_state.cuenca_results['dem_bytes']) 
-        
-        if st.session_state.precalculated_acc is not None:
-            st.session_state.dem25_processing_stage = 2 # Avanzar a la etapa final de visualización
-            st.session_state.show_dem25_content = True # Ahora sí, mostrar el contenido
-            st.rerun() # Forzar rerun para mostrar el mapa interactivo
-        else:
-            st.error("Error en la Etapa 2: Falló el pre-cálculo de la red fluvial.")
-            st.session_state.dem25_processing_stage = -1
-            st.stop()
-    # --- FIN: Lógica para el botón "Analizar Hojas y DEM para la Cuenca Actual" ---
-
-
-    # --- Contenido principal de la pestaña (solo se muestra si el procesamiento ha terminado con éxito) ---
-    if not st.session_state.get('show_dem25_content') or not st.session_state.get('cuenca_results') or st.session_state.dem25_processing_stage == -1:
-        st.stop() # Detener si no estamos listos o hay un error
+    if not st.session_state.get('show_dem25_content') or not st.session_state.get('cuenca_results'):
+        st.stop()
     
     st.subheader("Mapa de Situación")
     m = folium.Map(tiles="CartoDB positron", zoom_start=10) # Añadido zoom_start para mejor visualización inicial
     folium.TileLayer('OpenStreetMap').add_to(m)
     folium.TileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', attr='Esri', name='Imágenes Satélite').add_to(m)
+    cuenca_results = st.session_state.cuenca_results
+    folium.GeoJson(cuenca_results['cuenca_gdf'], name="Cuenca", style_function=lambda x: {'color': 'white', 'weight': 2.5}).add_to(m)
+    buffer_layer = folium.GeoJson(cuenca_results['buffer_gdf'], name="Buffer Cuenca (5km)", style_function=lambda x: {'color': 'tomato', 'fillOpacity': 0.1}).add_to(m)
+    folium.GeoJson(cuenca_results['hojas'], name="Hojas (Cuenca)", style_function=lambda x: {'color': '#ffc107', 'weight': 2, 'fillOpacity': 0.4}).add_to(m)
+    m.fit_bounds(buffer_layer.get_bounds())
+    
+    if st.session_state.get('user_drawn_geojson'): folium.GeoJson(json.loads(st.session_state.user_drawn_geojson), name="Polígono Dibujado", style_function=lambda x: {'color': 'magenta', 'weight': 3, 'fillOpacity': 0.2, 'dashArray': '5, 5'}).add_to(m)
+    if 'poligono_results' in st.session_state and "error" not in st.session_state.poligono_results: folium.GeoJson(st.session_state.poligono_results['hojas'], name="Hojas (Polígono)", style_function=lambda x: {'color': 'magenta', 'weight': 2.5, 'fillOpacity': 0.5}).add_to(m)
+    if st.session_state.get("drawing_mode_active"): Draw(export=True, filename='data.geojson', position='topleft', draw_options={'polyline': False, 'rectangle': False, 'circle': False, 'marker': False, 'circlemarker': False, 'polygon': {'shapeOptions': {'color': 'magenta', 'weight': 3, 'fillOpacity': 0.2}}}, edit_options={'edit': False}).add_to(m)
+    folium.LayerControl().add_to(m)
+    map_output = st_folium(m, use_container_width=True, height=800, returned_objects=['all_drawings'])
+    if st.session_state.get("drawing_mode_active") and map_output.get("all_drawings"):
+        st.session_state.user_drawn_geojson = json.dumps(map_output["all_drawings"][0]['geometry']); st.session_state.drawing_mode_active = False; st.rerun()
+
+    with st.expander("📝 Herramientas de Dibujo para un área personalizada"):
+        c1, c2, c3 = st.columns([2, 2, 3])
+        if c1.button("Iniciar / Reiniciar Dibujo", use_container_width=True): 
+            st.session_state.drawing_mode_active = True; st.session_state.pop('user_drawn_geojson', None); st.session_state.pop('poligono_results', None); st.session_state.pop('polygon_error_message', None); st.rerun()
+        if c2.button("Cancelar Dibujo", use_container_width=True): st.session_state.drawing_mode_active = False; st.rerun()
+        if st.session_state.get('user_drawn_geojson'):
+            if c3.button("▶️ Analizar Polígono Dibujado", use_container_width=True):
+                results = procesar_datos_poligono(st.session_state.user_drawn_geojson)
+                if "error" in results: st.session_state.polygon_error_message = results["error"]; st.session_state.pop('poligono_results', None)
+                else: st.session_state.poligono_results = results; st.session_state.pop('polygon_error_message', None)
+                st.rerun()
+
+    if st.session_state.get('polygon_error_message'):
+        st.markdown(f"<p style='font-size: 20px; color: tomato; font-weight: bold;'>⚠️ {st.session_state.get('polygon_error_message')}</p>", unsafe_allow_html=True)
+
+    st.divider()
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("Resultados (Cuenca + Buffer)")
+        st.metric("Hojas intersectadas", len(cuenca_results['hojas']))
+        df = pd.DataFrame({'Nombre Archivo (CNIG)': [f"MDT25-ETRS89-H{h['huso']}-{h['numero']}-COB2.tif" for _, h in cuenca_results['hojas'].sort_values(by=['huso', 'numero']).iterrows()]}); st.dataframe(df)
+    with col2:
+        st.subheader("DEM Compuesto (Cuenca)")
+        fig, ax = plt.subplots(); dem_array = cuenca_results['dem_array'][0]
+        nodata = dem_array.min(); plot_array = np.where(dem_array == nodata, np.nan, dem_array)
+        im = ax.imshow(plot_array, cmap='terrain'); fig.colorbar(im, ax=ax, label='Elevación (m)'); ax.set_axis_off(); st.pyplot(fig)
+        st.download_button("📥 **Descargar DEM de Cuenca (.tif)**", cuenca_results['dem_bytes'], "dem_cuenca_buffer.tif", "image/tiff", use_container_width=True)
+        st.download_button("📥 **Descargar Contorno Buffer (.zip)**", cuenca_results['shp_zip_bytes'], "contorno_cuenca_buffer.zip", "application/zip", use_container_width=True)
+
+    if 'poligono_results' in st.session_state and "error" not in st.session_state.poligono_results:
+        st.divider()
+        poly_results = st.session_state.poligono_results
+        col_p1, col_p2 = st.columns(2)
+        with col_p1:
+            st.subheader("Resultados (Polígono Manual)")
+            st.metric("Área del Polígono", f"{poly_results['area_km2']:,.2f} km²")
+            st.metric("Hojas intersectadas", len(poly_results['hojas']))
+            df_poly = pd.DataFrame({'Nombre Archivo (CNIG)': [f"MDT25-ETRS89-H{h['huso']}-{h['numero']}-COB2.tif" for _, h in poly_results['hojas'].sort_values(by=['huso', 'numero']).iterrows()]}); st.dataframe(df_poly)
+        with col_p2:
+            st.subheader("DEM Compuesto (Polígono)")
+            fig, ax = plt.subplots(); dem_array = poly_results['dem_array']
+            nodata = dem_array[0].min(); plot_array = np.where(dem_array[0] == nodata, np.nan, dem_array[0])
+            im = ax.imshow(plot_array, cmap='terrain'); fig.colorbar(im, ax=ax, label='Elevación (m)'); ax.set_axis_off(); st.pyplot(fig)
+            st.download_button("📥 **Descargar DEM de Polígono (.tif)**", poly_results['dem_bytes'], "dem_poligono_manual.tif", "image/tiff", use_container_width=True)
+            st.download_button("📥 **Descargar Contorno Polígono (.zip)**", poly_results['shp_zip_bytes'], "contorno_poligono_manual.zip", "application/zip", use_container_width=True)
+    
+    st.divider(); st.header("Análisis Hidrológico (Cuenca y Red Fluvial)")
+    
+    st.subheader("Paso 1: Seleccione un punto de salida (outlet) en el mapa")
+    st.info("Haga clic en el mapa para definir el punto de desagüe. Puede usar la capa de referencia (semitransparente) para localizar los cauces principales.")
+    map_select = folium.Map(tiles="CartoDB positron", zoom_start=10) # Añadido zoom_start para mejor visualización inicial
+    folium.TileLayer('OpenStreetMap').add_to(map_select)
+    folium.TileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', attr='Esri', name='Imágenes Satélite').add_to(map_select)
     buffer_gdf = st.session_state.cuenca_results['buffer_gdf']
     buffer_layer_select = folium.GeoJson(buffer_gdf, name="Área de Análisis")
-    buffer_layer_select.add_to(m)
-    m.fit_bounds(buffer_layer_select.get_bounds())
+    buffer_layer_select.add_to(map_select)
+    map_select.fit_bounds(buffer_layer_select.get_bounds())
     
     if st.session_state.get('basin_geojson'):
-        folium.GeoJson(json.loads(st.session_state.basin_geojson), name="Cuenca (Pestaña 1)", style_function=lambda x: {'color': 'darkorange', 'weight': 2.5, 'fillOpacity': 0.1, 'dashArray': '5, 5'}).add_to(m)
+        folium.GeoJson(json.loads(st.session_state.basin_geojson), name="Cuenca (Pestaña 1)", style_function=lambda x: {'color': 'darkorange', 'weight': 2.5, 'fillOpacity': 0.1, 'dashArray': '5, 5'}).add_to(map_select)
     if st.session_state.get('lat_wgs84') and st.session_state.get('lon_wgs84'):
-        folium.Marker([st.session_state.lat_wgs84, st.session_state.lon_wgs84], popup="Punto de Interés (Pestaña 1)", icon=folium.Icon(color="red", icon="info-sign")).add_to(m)
+        folium.Marker([st.session_state.lat_wgs84, st.session_state.lon_wgs84], popup="Punto de Interés (Pestaña 1)", icon=folium.Icon(color="red", icon="info-sign")).add_to(map_select)
 
     if 'precalculated_acc' in st.session_state and st.session_state.precalculated_acc is not None:
         acc_raster = st.session_state.precalculated_acc
@@ -546,22 +587,19 @@ def render_dem25_tab():
         img.save(buffered, format="PNG")
         img_str = base64.b64encode(buffered.getvalue()).decode()
         img_url = f"data:image/png;base64,{img_str}"
-        folium.raster_layers.ImageOverlay(image=img_url, bounds=[[bounds[1], bounds[0]], [bounds[3], bounds[2]]], opacity=0.6, name='Referencia de Cauces (Acumulación)').add_to(m)
+        folium.raster_layers.ImageOverlay(image=img_url, bounds=[[bounds[1], bounds[0]], [bounds[3], bounds[2]]], opacity=0.6, name='Referencia de Cauces (Acumulación)').add_to(map_select)
 
-    # --- ¡CORRECCIÓN DEL ERROR! Comprobamos si outlet_coords existe y no es None ---
-    if st.session_state.get('outlet_coords') is not None:
+    if 'outlet_coords' in st.session_state:
         coords = st.session_state.outlet_coords
-        if coords is not None: # Doble comprobación para mayor seguridad
-            folium.Marker([coords['lat'], coords['lng']], popup="Punto de Salida Seleccionado", icon=folium.Icon(color='orange')).add_to(m)
+        folium.Marker([coords['lat'], coords['lng']], popup="Punto de Salida Seleccionado", icon=folium.Icon(color='orange')).add_to(map_select)
     
-    folium.LayerControl().add_to(m)
-    map_output_select = st_folium(m, key="map_select", use_container_width=True, height=800, returned_objects=['last_clicked'])
+    folium.LayerControl().add_to(map_select)
+    map_output_select = st_folium(map_select, key="map_select", use_container_width=True, height=800, returned_objects=['last_clicked'])
 
-    if map_output_select and map_output_select.get("last_clicked"):
-        # Solo actualizamos si el clic es diferente para evitar reruns innecesarios
+    if map_output_select.get("last_clicked"):
         if st.session_state.get('outlet_coords') != map_output_select["last_clicked"]:
             st.session_state.outlet_coords = map_output_select["last_clicked"]
-            st.rerun() # Forzamos rerun para que el marcador se dibuje y el botón se habilite
+            st.rerun()
 
     # --- SECCIÓN DE CÁLCULO Y VISUALIZACIÓN (MODIFICADA PARA USAR LA FUNCIÓN DIRECTA) ---
     st.subheader("Paso 2: Cálculos GIS y Análisis de precisión")
@@ -573,14 +611,15 @@ def render_dem25_tab():
     area_seleccionada_km2 = umbral_celdas * CELL_AREA_KM2
     st.info(f"**Valor seleccionado:** {umbral_celdas} celdas  ➡️  **Área de drenaje mínima:** {area_seleccionada_km2:.4f} km²")
 
-    # El botón "Calcular Cuenca y Red Fluvial" ahora se habilita si hay un punto de salida
-    if st.button("Calcular Cuenca y Red Fluvial", use_container_width=True, disabled=st.session_state.get('outlet_coords') is None):
+    if st.button("Calcular Cuenca y Red Fluvial", use_container_width=True, disabled='outlet_coords' not in st.session_state):
         if 'hidro_results_externo' in st.session_state:
             del st.session_state['hidro_results_externo']
 
+        # --- ¡AQUÍ ESTÁ EL CAMBIO CLAVE! ---
+        # Se llama a la función directa en lugar del subproceso.
         with st.spinner("Ejecutando análisis hidrológico completo... Esto puede tardar unos segundos."):
             results = realizar_analisis_hidrologico_directo(
-                DEM_NACIONAL_PATH, # Pasamos la URL directamente
+                st.session_state.cuenca_results['dem_bytes'], # dem_bytes es ahora el DEM recortado en memoria
                 st.session_state.outlet_coords,
                 umbral_celdas
             )
@@ -591,7 +630,7 @@ def render_dem25_tab():
         elif results:
             st.error(f"El análisis reportó un error:")
             st.code(results.get("message", "Error desconocido."), language='bash')
-        st.rerun() # Forzamos rerun para mostrar los resultados del análisis hidrológico
+        st.rerun()
 
     # --- La lógica para mostrar los resultados permanece igual, ya que la estructura del
     #     diccionario 'results' es idéntica a la que devolvía el script original.
