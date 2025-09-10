@@ -1,11 +1,8 @@
-# dem25_tab.py (Versión con análisis hidrológico integrado)
+# dem25_tab.py (Versión adaptada para COGs grandes en Pestaña 2)
 
 # ==============================================================================
 # SECCIÓN 1: IMPORTS
-# Se combinan las librerías necesarias de la app Streamlit y del script de análisis.
 # ==============================================================================
-
-# --- Imports de Streamlit y la interfaz principal ---
 import streamlit as st
 import geopandas as gpd
 import folium
@@ -34,32 +31,27 @@ from rasterio.mask import mask
 from rasterio import features
 import rasterio
 from core_logic.gis_utils import get_local_path_from_url # Necesitamos esta para los GPKG y ZIPs
+
 # ==============================================================================
 # SECCIÓN 2: CONSTANTES Y CONFIGURACIÓN
 # ==============================================================================
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-# HOJAS_MTN25_PATH = os.path.join(PROJECT_ROOT, "CNIG", "MTN25_ACTUAL_ETRS89_Peninsula_Baleares_Canarias.shp")
 HOJAS_MTN25_PATH = "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/caumax-hidrologia-data/MTN25_ACTUAL_ETRS89_Peninsula_Baleares_Canarias.zip"
-# DEM_NACIONAL_PATH = os.path.join(PROJECT_ROOT, "MDT25_peninsula_UTM30N.tif")
+# --- ¡CRÍTICO! Apunta al COG grande de 700MB ---
 DEM_NACIONAL_PATH = "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/caumax-hidrologia-data/MDT25_peninsula_UTM30N_COG.tif"
 BUFFER_METROS = 5000
 LIMITE_AREA_KM2 = 15000
+# --- ¡¡¡ESTA CONSTANTE FALTABA Y ES LA CAUSA DEL ERROR!!! ---
+AREA_PROCESSING_LIMIT_KM2 = 50000 # Límite para evitar procesar cuencas gigantes en Pestaña 2
+# --- ¡¡¡AHORA SÍ ESTÁ!!! ---
 
 # ==============================================================================
 # SECCIÓN 3: LÓGICA DE ANÁLISIS HIDROLÓGICO
-# Esta sección contiene el código de 'delinear_cuenca.py' refactorizado como
-# una función de Python, eliminando la necesidad de un subproceso.
 # ==============================================================================
 
 def fig_to_base64(fig):
-    """
-    Convierte una figura de Matplotlib a una cadena Base64.
-    Esta función es idéntica a la del script original para asegurar que los
-    gráficos se codifiquen de la misma manera.
-    """
     buf = io.BytesIO()
-    # Se conservan los parámetros originales para mantener la calidad y el formato
     fig.savefig(buf, format='png', bbox_inches='tight', dpi=150)
     plt.close(fig)
     return base64.b64encode(buf.getvalue()).decode('utf-8')
@@ -74,17 +66,7 @@ def realizar_analisis_hidrologico_directo(dem_url, outlet_coords_wgs84, umbral_r
         "lfp_metrics": {}, "hypsometric_data": {}, "lfp_profile_data": {}
     }
     
-    # No necesitamos un archivo temporal para el DEM si lo abrimos directamente.
-    # Pero PySheds necesita una ruta. Vamos a descargar un pequeño trozo si es necesario.
-    
     try:
-        # --- PASO 1: PREPARAR DATOS DE ENTRADA ---
-        # PySheds Grid.from_raster puede abrir URLs directamente si GDAL está configurado.
-        # Sin embargo, para mayor robustez, especialmente con PySheds, a veces es mejor
-        # trabajar con un archivo local, incluso si es un trozo.
-        # Para este caso, vamos a abrir el COG directamente con rasterio para el recorte
-        # y luego, si PySheds lo necesita, le pasamos el recorte.
-
         # Abrimos el DEM grande directamente desde la URL con rasterio
         with rasterio.open(dem_url) as src_global:
             # Transformamos las coordenadas de WGS84 a ETRS89 UTM 30N (CRS del DEM)
@@ -137,7 +119,6 @@ def realizar_analisis_hidrologico_directo(dem_url, outlet_coords_wgs84, umbral_r
         upa = flw.upstream_area(unit='cell')
 
         # --- PASO 4: GENERACIÓN DE GRÁFICOS Y MÉTRICAS (CÓDIGO ORIGINAL) ---
-        # ... (todo el código de generación de gráficos, métricas, etc. se queda igual) ...
         # Asegúrate de que las llamadas a imshow y plot usen 'grid_para_plot.extent' o 'grid.extent'
         # y que los datos de elevación sean 'conditioned_dem' o 'dem_data' según corresponda.
 
@@ -518,13 +499,15 @@ def render_dem25_tab():
         st.stop()
     
     st.subheader("Mapa de Situación")
-    m = folium.Map(tiles="CartoDB positron")
+    m = folium.Map(tiles="CartoDB positron", zoom_start=10) # Añadido zoom_start para mejor visualización inicial
+    folium.TileLayer('OpenStreetMap').add_to(m)
     folium.TileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', attr='Esri', name='Imágenes Satélite').add_to(m)
     cuenca_results = st.session_state.cuenca_results
     folium.GeoJson(cuenca_results['cuenca_gdf'], name="Cuenca", style_function=lambda x: {'color': 'white', 'weight': 2.5}).add_to(m)
     buffer_layer = folium.GeoJson(cuenca_results['buffer_gdf'], name="Buffer Cuenca (5km)", style_function=lambda x: {'color': 'tomato', 'fillOpacity': 0.1}).add_to(m)
     folium.GeoJson(cuenca_results['hojas'], name="Hojas (Cuenca)", style_function=lambda x: {'color': '#ffc107', 'weight': 2, 'fillOpacity': 0.4}).add_to(m)
     m.fit_bounds(buffer_layer.get_bounds())
+    
     if st.session_state.get('user_drawn_geojson'): folium.GeoJson(json.loads(st.session_state.user_drawn_geojson), name="Polígono Dibujado", style_function=lambda x: {'color': 'magenta', 'weight': 3, 'fillOpacity': 0.2, 'dashArray': '5, 5'}).add_to(m)
     if 'poligono_results' in st.session_state and "error" not in st.session_state.poligono_results: folium.GeoJson(st.session_state.poligono_results['hojas'], name="Hojas (Polígono)", style_function=lambda x: {'color': 'magenta', 'weight': 2.5, 'fillOpacity': 0.5}).add_to(m)
     if st.session_state.get("drawing_mode_active"): Draw(export=True, filename='data.geojson', position='topleft', draw_options={'polyline': False, 'rectangle': False, 'circle': False, 'marker': False, 'circlemarker': False, 'polygon': {'shapeOptions': {'color': 'magenta', 'weight': 3, 'fillOpacity': 0.2}}}, edit_options={'edit': False}).add_to(m)
@@ -583,7 +566,7 @@ def render_dem25_tab():
     
     st.subheader("Paso 1: Seleccione un punto de salida (outlet) en el mapa")
     st.info("Haga clic en el mapa para definir el punto de desagüe. Puede usar la capa de referencia (semitransparente) para localizar los cauces principales.")
-    map_select = folium.Map(tiles="CartoDB positron", zoom_start=10)
+    map_select = folium.Map(tiles="CartoDB positron", zoom_start=10) # Añadido zoom_start para mejor visualización inicial
     folium.TileLayer('OpenStreetMap').add_to(map_select)
     folium.TileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', attr='Esri', name='Imágenes Satélite').add_to(map_select)
     buffer_gdf = st.session_state.cuenca_results['buffer_gdf']
