@@ -161,7 +161,7 @@ def realizar_analisis_hidrologico_directo(dem_url, outlet_coords_wgs84, umbral_r
             lfp_coords.append((x_coord, y_coord))
             direction = flowdir[current_row, current_col]
             if direction == 0: break
-            row_move, col_move = dirmap[direction]; current_row += row_move; current_col += col_col_move
+            row_move, col_move = dirmap[direction]; current_row += row_move; current_col += col_move
 
         # GRÁFICO 3/7 UNIFICADO: LFP y Red Fluvial de Strahler
         stream_mask_strahler = upa > umbral_rio_export
@@ -480,7 +480,8 @@ def render_dem25_tab():
     # --- Lógica de las etapas de procesamiento ---
     # Etapa 0: Procesar datos de la cuenca (recorte del DEM)
     if st.session_state.dem25_processing_stage == 0:
-        if st.session_state.get('analyze_dem_button'): # Solo si se pulsó el botón
+        # Solo si se pulsó el botón o si ya estamos en esta etapa por un rerun
+        if st.session_state.get('analyze_dem_button') or st.session_state.get('cuenca_results') is None: 
             try:
                 temp_cuenca_gdf = gpd.read_file(st.session_state.basin_geojson).set_crs("EPSG:4326")
                 area_km2 = temp_cuenca_gdf.to_crs("EPSG:25830").area.sum() / 1_000_000
@@ -505,8 +506,9 @@ def render_dem25_tab():
                 st.session_state.dem25_processing_stage = -1
                 st.stop()
         else:
+            # Si no se ha pulsado el botón y no hay procesamiento en curso, simplemente esperamos
             st.info("Pulse 'Analizar Hojas y DEM para la Cuenca Actual' para iniciar el procesamiento.")
-            st.stop() # Detener si no se ha pulsado el botón y no hay procesamiento en curso
+            st.stop() 
 
     # Etapa 1: Pre-calcular acumulación (PyFlwdir)
     if st.session_state.dem25_processing_stage == 1:
@@ -555,7 +557,8 @@ def render_dem25_tab():
     # --- ¡CORRECCIÓN DEL ERROR! Comprobamos si outlet_coords existe y no es None ---
     if st.session_state.get('outlet_coords') is not None:
         coords = st.session_state.outlet_coords
-        folium.Marker([coords['lat'], coords['lng']], popup="Punto de Salida Seleccionado", icon=folium.Icon(color='orange')).add_to(m)
+        if coords is not None: # Doble comprobación para mayor seguridad
+            folium.Marker([coords['lat'], coords['lng']], popup="Punto de Salida Seleccionado", icon=folium.Icon(color='orange')).add_to(m)
     
     folium.LayerControl().add_to(m)
     map_output_select = st_folium(m, key="map_select", use_container_width=True, height=800, returned_objects=['last_clicked'])
