@@ -490,7 +490,7 @@ def render_dem25_tab():
             st.session_state.pop('polygon_error_message', None)
             st.session_state.pop('hidro_results_externo', None)
             st.session_state.show_dem25_content = True
-            st.rerun()
+            #st.rerun()
         else:
             st.error("No se pudo procesar la cuenca. La operación falló o superó el tiempo de espera. Revisa los logs del servidor para más detalles.")
             st.session_state.show_dem25_content = False
@@ -589,7 +589,7 @@ def render_dem25_tab():
         img_url = f"data:image/png;base64,{img_str}"
         folium.raster_layers.ImageOverlay(image=img_url, bounds=[[bounds[1], bounds[0]], [bounds[3], bounds[2]]], opacity=0.6, name='Referencia de Cauces (Acumulación)').add_to(map_select)
 
-    if 'outlet_coords' in st.session_state:
+    if 'outlet_coords' in st.session_state and st.session_state.outlet_coords is not None:
         coords = st.session_state.outlet_coords
         folium.Marker([coords['lat'], coords['lng']], popup="Punto de Salida Seleccionado", icon=folium.Icon(color='orange')).add_to(map_select)
     
