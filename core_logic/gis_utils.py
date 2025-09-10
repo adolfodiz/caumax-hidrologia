@@ -35,46 +35,11 @@ _temp_dir = tempfile.TemporaryDirectory()
 
 @cache_resource(ttl=3600)
 def get_local_path_from_url(url):
-    try:
-        # Si la URL es de un raster COG, devolvemos la URL para lectura directa.
-        if url.endswith(('_COG.tif', '_cog.tif', '.tif')) and url.startswith('http'):
-            return url
-
-        # Para otros archivos (gpkg, zip), sí los descargamos.
-        filename = os.path.basename(url)
-        local_path = os.path.join(_temp_dir.name, filename)
-
-        if os.path.exists(local_path) and os.path.getsize(local_path) > 0:
-            return local_path
-
-        with requests.get(url, stream=True) as r:
-            r.raise_for_status()
-            with open(local_path, 'wb') as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    f.write(chunk)
-        
-        if os.path.getsize(local_path) == 0: return None
-        return local_path
-    except Exception as e:
-        print(f"Error crítico durante la gestión de la ruta/URL {url}: {e}")
-        return None
-
-# Esta función ya no es necesaria para los rásters, pero la mantenemos
-# por si la usan los archivos vectoriales (gpkg).
-@cache_resource(ttl=3600)
-def get_local_path_from_url(url):
     """
     Toma una URL, descarga el archivo a un directorio temporal persistente
     y devuelve la RUTA LOCAL a ese archivo.
     """
     try:
-        # Si la URL es de un raster COG, no la descargamos, devolvemos la URL.
-        if url.endswith(('_COG.tif', '_cog.tif', '.tif')):
-             # Comprobación extra para asegurarse de que es una URL y no una ruta local
-            if url.startswith('http'):
-                return url
-
-        # Para otros archivos (gpkg, zip), sí los descargamos.
         filename = os.path.basename(url)
         local_path = os.path.join(_temp_dir.name, filename)
 
@@ -92,9 +57,8 @@ def get_local_path_from_url(url):
 
         return local_path
     except Exception as e:
-        print(f"Error crítico durante la gestión de la ruta/URL {url}: {e}")
+        print(f"Error crítico durante la descarga del archivo {url}: {e}")
         return None
-
 
 def get_layer_path(layer_key):
     return LAYER_MAPPING.get(layer_key)

@@ -34,22 +34,16 @@ class BasinCalculatorRefactored:
         gdal.UseExceptions()
         gdal.AllRegister()
 
-        # --- INICIO: CAMBIO 2 - Creamos rutas virtuales para GDAL ---
-        self.gdal_raster_paths = {}
-        for key, url in layer_mapping_from_app.items():
-            # Solo procesamos los TIFs que esta clase necesita
-            if url.endswith(('.tif', '_COG.tif', '_cog.tif')):
-                # get_local_path_from_url nos devolverá la URL directamente
-                path_or_url = get_local_path_from_url(url)
-                # Le añadimos el prefijo de GDAL para que sepa leer desde la web
-                self.gdal_raster_paths[key] = f"/vsicurl/{path_or_url}"
-        # --- FIN: CAMBIO 2 ---
+        # VOLVEMOS A LA LÓGICA ORIGINAL: Descargamos todos los archivos necesarios
+        # y guardamos sus rutas locales. Esto es robusto y funcionaba antes.
+        self.local_layer_paths = {
+            key: get_local_path_from_url(url)
+            for key, url in layer_mapping_from_app.items()
+        }
 
-        # --- INICIO: CAMBIO 3 - Usamos las nuevas rutas virtuales ---
-        mdt_path = self.gdal_raster_paths["MDT"]
-        flowdirs_path = self.gdal_raster_paths["FLOWDIRS"]
-        # --- FIN: CAMBIO 3 ---
-        
+        mdt_path = self.local_layer_paths["MDT"]
+        flowdirs_path = self.local_layer_paths["FLOWDIRS"]
+
         mdt_dataset = gdal.Open(mdt_path, gdal.GA_ReadOnly)
         if mdt_dataset is None:
             raise FileNotFoundError(f"No se pudo abrir el dataset MDT en {mdt_path}")
@@ -74,15 +68,15 @@ class BasinCalculatorRefactored:
         self.secondaryNodata = {}
         self.secondaryTransforms = {}
         
-        self._open_secondary_layer(self.gdal_raster_paths["I1ID"], "I1ID")
-        self._open_secondary_layer(self.gdal_raster_paths["P0"], "P0")
+        self._open_secondary_layer(self.local_layer_paths["I1ID"], "I1ID")
+        self._open_secondary_layer(self.local_layer_paths["P0"], "P0")
 
         self.rainFiles = {
             2: "RAIN_2", 5: "RAIN_5", 10: "RAIN_10",
             25: "RAIN_25", 100: "RAIN_100", 500: "RAIN_500",
         }
         for returnPeriod, rainFileKey in self.rainFiles.items():
-            self._open_secondary_layer(self.gdal_raster_paths[rainFileKey], returnPeriod)
+            self._open_secondary_layer(self.local_layer_paths[rainFileKey], returnPeriod)
 
         self._resetValues()
 
