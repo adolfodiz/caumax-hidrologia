@@ -318,12 +318,14 @@ def procesar_datos_cuenca(basin_geojson_str):
         geom_para_interseccion = buffer_gdf.to_crs(hojas_gdf.crs)
         hojas = gpd.sjoin(hojas_gdf, geom_para_interseccion, how="inner", predicate="intersects").drop_duplicates(subset=['numero'])
         
-        local_dem_path = get_local_path_from_url(DEM_NACIONAL_PATH)
-        if not local_dem_path:
-            st.error("No se pudo descargar el DEM nacional desde la nube.")
+        local_dem_path = DEM_NACIONAL_PATH # <-- NO usamos get_local_path_from_url aquí
+        if not local_dem_path.startswith('http'):
+            st.error("Error interno: La ruta del DEM nacional no es una URL.")
             return None
+            
+        print(f"LOG: Abriendo DEM Nacional (COG) directamente desde URL: {local_dem_path}...")
 
-        with rasterio.open(local_dem_path) as src:
+        with rasterio.open(local_dem_path) as src: # Rasterio puede abrir la URL directamente
             geom_recorte_gdf = buffer_gdf.to_crs(src.crs)
             dem_recortado, trans_recortado = mask(dataset=src, shapes=geom_recorte_gdf.geometry, crop=True, nodata=src.nodata or -32768)
             meta = src.meta.copy()

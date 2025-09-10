@@ -28,8 +28,12 @@ CORINE_COLOR_MAP = {111:'#E6004D',112:'#FF0000',121:'#CC4DF2',122:'#CC0000',123:
 # --- 2. FUNCIONES DE LÓGICA (Sin cambios) ---
 @st.cache_resource(show_spinner=False)
 def clip_raster_to_geometry(raster_path, _geometry_gdf):
-    if not os.path.exists(raster_path): st.error(f"Archivo no encontrado: {raster_path}."); return None, None
-    with rasterio.open(raster_path) as src:
+    # Aseguramos que se lee directamente de la URL.
+    if not raster_path.startswith('http'):
+        st.error(f"Error interno: La ruta del ráster '{raster_path}' no es una URL.")
+        return None, None
+    print(f"LOG: Abriendo ráster (COG) directamente desde URL: {raster_path}...")
+    with rasterio.open(raster_path) as src: # Rasterio puede abrir la URL directamente
         geometry_gdf_reprojected = _geometry_gdf.to_crs(src.crs)
         try:
             out_image, out_transform = mask(dataset=src, shapes=geometry_gdf_reprojected.geometry, crop=True, nodata=src.nodata)
@@ -43,19 +47,35 @@ def raster_to_bytes(raster_image, raster_meta):
         return memfile.read()
 
 def sample_rasters_along_line(_line_geom, _rasters_data):
+    # Aseguramos que se lee directamente de la URL.
+    # Abrimos los datasets UNA VEZ fuera del bucle.
+    dem_src = rasterio.open(_rasters_data['dem_bytes'])
+    corine_src = rasterio.open(_rasters_data['corine_bytes'])
+    cn_src = rasterio.open(_rasters_data['cn_bytes'])
+    
     gdf_line = gpd.GeoDataFrame(geometry=[_line_geom], crs="EPSG:4326").to_crs(_rasters_data['dem_meta']['crs'])
     distances, dem_values, corine_values, cn_values = [], [], [], []
     num_samples = 150
     for i in range(num_samples + 1):
         point = gdf_line.geometry.iloc[0].interpolate(i / num_samples, normalized=True)
         distance = gdf_line.geometry.iloc[0].project(point)
-        with MemoryFile(_rasters_data['dem_bytes']).open() as src: dem_val = next(src.sample([(point.x, point.y)]))[0]
-        with MemoryFile(_rasters_data['corine_bytes']).open() as src: corine_val = next(src.sample([(point.x, point.y)]))[0]
-        with MemoryFile(_rasters_data['cn_bytes']).open() as src: cn_val = next(src.sample([(point.x, point.y)]))[0]
+        
+        # Leemos los valores del ráster AHORA usando los objetos 'src' que abrimos al principio.
+        # Esto es eficiente y correcto.
+        dem_val = next(dem_src.sample([(point.x, point.y)]))[0]
+        corine_val = next(corine_src.sample([(point.x, point.y)]))[0]
+        cn_val = next(cn_src.sample([(point.x, point.y)]))[0]
+        
         distances.append(distance / 1000)
         dem_values.append(dem_val if dem_val > -999 else np.nan)
         corine_values.append(corine_val)
         cn_values.append(cn_val if cn_val > 0 else np.nan)
+
+    # Es importante cerrar los datasets al final, ya que los abrimos fuera del bucle.
+    dem_src.close()
+    corine_src.close()
+    cn_src.close()
+    
     return distances, dem_values, corine_values, cn_values
 
 # --- 3. FUNCIÓN PRINCIPAL DE LA PESTAÑA ---
