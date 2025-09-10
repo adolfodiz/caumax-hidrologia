@@ -2,6 +2,9 @@ import requests
 import io
 import tempfile
 import os
+# --- ¡¡¡ESTE IMPORT FALTABA Y ES LA CAUSA DEL ERROR!!! ---
+import streamlit as st 
+# --- ¡¡¡AHORA SÍ ESTÁ!!! ---
 from streamlit import cache_resource
 import rasterio
 import fiona
