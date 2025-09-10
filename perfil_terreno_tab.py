@@ -106,7 +106,8 @@ def render_perfil_terreno_tab():
 
     st.success(f"**Área activa para el análisis y recorte:** {source_name}")
     
-    if 'perfil_data' in st.session_state and st.session_state.perfil_data.get('source_name') != source_name:
+    #if 'perfil_data' in st.session_state and st.session_state.perfil_data.get('source_name') != source_name:
+    if st.session_state.get('perfil_data') and st.session_state.perfil_data.get('source_name') != source_name:
         del st.session_state['perfil_data']
         if 'active_profile_line' in st.session_state: del st.session_state['active_profile_line']
         st.info("La fuente de datos ha cambiado. Por favor, cargue los nuevos datos para el área activa.")

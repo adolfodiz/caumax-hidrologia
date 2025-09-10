@@ -490,7 +490,7 @@ def render_dem25_tab():
             st.session_state.pop('polygon_error_message', None)
             st.session_state.pop('hidro_results_externo', None)
             st.session_state.show_dem25_content = True
-            #st.rerun()
+            st.rerun()
         else:
             st.error("No se pudo procesar la cuenca. La operación falló o superó el tiempo de espera. Revisa los logs del servidor para más detalles.")
             st.session_state.show_dem25_content = False
