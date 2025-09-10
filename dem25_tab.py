@@ -460,7 +460,6 @@ def render_dem25_tab():
         st.stop()
 
     # --- INICIO: Lógica para el botón "Analizar Hojas y DEM para la Cuenca Actual" ---
-    # Esta lógica ahora gestiona las etapas de procesamiento automáticamente.
     # Usamos un estado para controlar el flujo de la Pestaña 2
     if 'dem25_processing_stage' not in st.session_state:
         st.session_state.dem25_processing_stage = 0 # 0: Inicio, 1: DEM recortado, 2: Acumulación calculada, -1: Error
@@ -479,36 +478,31 @@ def render_dem25_tab():
 
     # --- Lógica de las etapas de procesamiento ---
     # Etapa 0: Procesar datos de la cuenca (recorte del DEM)
-    if st.session_state.dem25_processing_stage == 0:
-        # Solo si se pulsó el botón o si ya estamos en esta etapa por un rerun
-        if st.session_state.get('analyze_dem_button') or st.session_state.get('cuenca_results') is None: 
-            try:
-                temp_cuenca_gdf = gpd.read_file(st.session_state.basin_geojson).set_crs("EPSG:4326")
-                area_km2 = temp_cuenca_gdf.to_crs("EPSG:25830").area.sum() / 1_000_000
-                if area_km2 > AREA_PROCESSING_LIMIT_KM2:
-                    st.error(f"El área de la cuenca calculada ({area_km2:,.0f} km²) es demasiado grande. Límite: {AREA_PROCESSING_LIMIT_KM2:,.0f} km².")
-                    st.session_state.dem25_processing_stage = -1
-                    st.stop() 
-            except Exception as e:
-                st.error(f"No se pudo verificar el área de la cuenca: {e}")
+    # Solo se activa si el botón fue pulsado O si ya estamos en una etapa de procesamiento
+    if st.session_state.dem25_processing_stage == 0 and st.session_state.get('analyze_dem_button'):
+        try:
+            temp_cuenca_gdf = gpd.read_file(st.session_state.basin_geojson).set_crs("EPSG:4326")
+            area_km2 = temp_cuenca_gdf.to_crs("EPSG:25830").area.sum() / 1_000_000
+            if area_km2 > AREA_PROCESSING_LIMIT_KM2:
+                st.error(f"El área de la cuenca calculada ({area_km2:,.0f} km²) es demasiado grande. Límite: {AREA_PROCESSING_LIMIT_KM2:,.0f} km².")
                 st.session_state.dem25_processing_stage = -1
-                st.stop()
+                st.stop() 
+        except Exception as e:
+            st.error(f"No se pudo verificar el área de la cuenca: {e}")
+            st.session_state.dem25_processing_stage = -1
+            st.stop()
 
-            with st.spinner("Etapa 1/2: Recortando DEM nacional para el área de la cuenca..."):
-                results = procesar_datos_cuenca(st.session_state.basin_geojson)
-            
-            if results:
-                st.session_state.cuenca_results = results
-                st.session_state.dem25_processing_stage = 1 # Avanzar a la siguiente etapa
-                st.rerun() # Forzar rerun para ejecutar la siguiente etapa
-            else:
-                st.error("Error en la Etapa 1: No se pudo procesar la cuenca. Revisa los logs del servidor.")
-                st.session_state.dem25_processing_stage = -1
-                st.stop()
+        with st.spinner("Etapa 1/2: Recortando DEM nacional para el área de la cuenca..."):
+            results = procesar_datos_cuenca(st.session_state.basin_geojson)
+        
+        if results:
+            st.session_state.cuenca_results = results
+            st.session_state.dem25_processing_stage = 1 # Avanzar a la siguiente etapa
+            st.rerun() # Forzar rerun para ejecutar la siguiente etapa
         else:
-            # Si no se ha pulsado el botón y no hay procesamiento en curso, simplemente esperamos
-            st.info("Pulse 'Analizar Hojas y DEM para la Cuenca Actual' para iniciar el procesamiento.")
-            st.stop() 
+            st.error("Error en la Etapa 1: No se pudo procesar la cuenca. Revisa los logs del servidor.")
+            st.session_state.dem25_processing_stage = -1
+            st.stop()
 
     # Etapa 1: Pre-calcular acumulación (PyFlwdir)
     if st.session_state.dem25_processing_stage == 1:
