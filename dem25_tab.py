@@ -33,7 +33,7 @@ import pyflwdir
 from rasterio.mask import mask
 from rasterio import features
 import rasterio
-from core_logic.gis_utils import get_local_path_from_url
+from core_logic.gis_utils import get_local_path_from_url # Necesitamos esta para los GPKG y ZIPs
 # ==============================================================================
 # SECCIÓN 2: CONSTANTES Y CONFIGURACIÓN
 # ==============================================================================
@@ -64,60 +64,85 @@ def fig_to_base64(fig):
     plt.close(fig)
     return base64.b64encode(buf.getvalue()).decode('utf-8')
 
-def realizar_analisis_hidrologico_directo(dem_bytes, outlet_coords_wgs84, umbral_rio_export):
+def realizar_analisis_hidrologico_directo(dem_url, outlet_coords_wgs84, umbral_rio_export):
     """
     Ejecuta el flujo de trabajo hidrológico completo directamente en la aplicación.
-    Esta función contiene la lógica íntegra de 'delinear_cuenca.py'.
+    Ahora lee el DEM directamente desde la URL.
     """
-    # Diccionario para almacenar todos los resultados, igual que en el script original.
     results = {
         "success": False, "message": "", "plots": {}, "downloads": {},
         "lfp_metrics": {}, "hypsometric_data": {}, "lfp_profile_data": {}
     }
     
-    # Se necesita un archivo temporal en disco para que las librerías geoespaciales
-    # (PySheds, Rasterio) puedan leer el DEM.
-    dem_path = None
+    # No necesitamos un archivo temporal para el DEM si lo abrimos directamente.
+    # Pero PySheds necesita una ruta. Vamos a descargar un pequeño trozo si es necesario.
+    
     try:
         # --- PASO 1: PREPARAR DATOS DE ENTRADA ---
-        # En lugar de leer un path de sys.argv, se usan los bytes del DEM en memoria.
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.tif') as tmp_dem:
-            tmp_dem.write(dem_bytes)
-            dem_path = tmp_dem.name
+        # PySheds Grid.from_raster puede abrir URLs directamente si GDAL está configurado.
+        # Sin embargo, para mayor robustez, especialmente con PySheds, a veces es mejor
+        # trabajar con un archivo local, incluso si es un trozo.
+        # Para este caso, vamos a abrir el COG directamente con rasterio para el recorte
+        # y luego, si PySheds lo necesita, le pasamos el recorte.
 
-        # En lugar de leer coordenadas JSON de sys.argv, se usan los argumentos de la función.
-        # Se transforman las coordenadas de WGS84 (EPSG:4326) a ETRS89 UTM 30N (EPSG:25830).
-        transformer = Transformer.from_crs("EPSG:4326", "EPSG:25830", always_xy=True)
-        x, y = transformer.transform(outlet_coords_wgs84['lng'], outlet_coords_wgs84['lat'])
+        # Abrimos el DEM grande directamente desde la URL con rasterio
+        with rasterio.open(dem_url) as src_global:
+            # Transformamos las coordenadas de WGS84 a ETRS89 UTM 30N (CRS del DEM)
+            transformer_wgs84_to_dem_crs = Transformer.from_crs("EPSG:4326", src_global.crs, always_xy=True)
+            x_dem_crs, y_dem_crs = transformer_wgs84_to_dem_crs.transform(outlet_coords_wgs84['lng'], outlet_coords_wgs84['lat'])
+
+            # Definimos un pequeño buffer alrededor del punto para el procesamiento de PySheds
+            # Esto evita cargar el DEM nacional completo en memoria para PySheds.
+            buffer_size_for_pysheds = 5000 # 5km de buffer alrededor del punto
+            bbox_utm = (x_dem_crs - buffer_size_for_pysheds, y_dem_crs - buffer_size_for_pysheds,
+                        x_dem_crs + buffer_size_for_pysheds, y_dem_crs + buffer_size_for_pysheds)
+            
+            # Recortamos un pequeño trozo del DEM para PySheds
+            out_image, out_transform = mask(src_global, [Polygon.from_bounds(*bbox_utm)], crop=True, nodata=src_global.nodata)
+            out_meta = src_global.meta.copy()
+            out_meta.update({"driver": "GTiff", "height": out_image.shape[1], "width": out_image.shape[2], "transform": out_transform})
+
+            # Guardamos este pequeño trozo en un archivo temporal para PySheds
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.tif') as tmp_dem_pysheds:
+                with rasterio.open(tmp_dem_pysheds.name, 'w', **out_meta) as dst:
+                    dst.write(out_image)
+                dem_path_for_pysheds = tmp_dem_pysheds.name
 
         # --- PASO 2: PROCESAMIENTO HIDROLÓGICO CON PYSHEDS (CÓDIGO ORIGINAL) ---
-        # Toda esta sección es una copia exacta de la lógica de 'delinear_cuenca.py'.
-        no_data_value = -32768
-        grid = Grid.from_raster(dem_path, nodata=no_data_value)
-        dem = grid.read_raster(dem_path, nodata=no_data_value)
+        no_data_value = out_meta.get('nodata', -32768)
+        grid = Grid.from_raster(dem_path_for_pysheds, nodata=no_data_value)
+        dem = grid.read_raster(dem_path_for_pysheds, nodata=no_data_value)
+
+        # Ajustamos las coordenadas del punto de salida al nuevo DEM recortado
+        x_snap, y_snap = grid.snap_to_mask(grid.accumulation(grid.flowdir(grid.fill_depressions(grid.fill_pits(dem)))) > umbral_rio_export, (x_dem_crs, y_dem_crs))
+        
+        # Si el punto de snap está fuera del DEM recortado, ajustamos.
+        if not (grid.extent[0] <= x_snap <= grid.extent[1] and grid.extent[2] <= y_snap <= grid.extent[3]):
+            results['message'] = "El punto de desagüe se encuentra demasiado cerca del borde del DEM recortado para el análisis. Intente un punto más central."
+            return results
 
         pit_filled_dem = grid.fill_pits(dem)
         flooded_dem = grid.fill_depressions(pit_filled_dem)
         conditioned_dem = grid.resolve_flats(flooded_dem)
         flowdir = grid.flowdir(conditioned_dem)
         acc = grid.accumulation(flowdir)
-        x_snap, y_snap = grid.snap_to_mask(acc > umbral_rio_export, (x, y))
+        
+        # Re-snap al DEM recortado
+        x_snap, y_snap = grid.snap_to_mask(acc > umbral_rio_export, (x_dem_crs, y_dem_crs))
         catch = grid.catchment(x=x_snap, y=y_snap, fdir=flowdir, xytype="coordinate")
 
         # --- PASO 3: INICIALIZACIÓN DE PYFLWDIR (CÓDIGO ORIGINAL) ---
-        with rasterio.open(dem_path) as src:
-            dem_data = src.read(1)
-            transform = src.transform
-            crs = src.crs
-        flw = pyflwdir.from_dem(data=dem_data, nodata=no_data_value, transform=transform, latlon=False)
+        # PyFlwdir también puede abrir el DEM recortado
+        flw = pyflwdir.from_dem(data=out_image[0], nodata=no_data_value, transform=out_transform, latlon=False)
         upa = flw.upstream_area(unit='cell')
 
         # --- PASO 4: GENERACIÓN DE GRÁFICOS Y MÉTRICAS (CÓDIGO ORIGINAL) ---
-        # Se ha copiado y pegado toda la lógica de generación de gráficos para
-        # asegurar que la estética, los títulos, colores y datos sean idénticos.
+        # ... (todo el código de generación de gráficos, métricas, etc. se queda igual) ...
+        # Asegúrate de que las llamadas a imshow y plot usen 'grid_para_plot.extent' o 'grid.extent'
+        # y que los datos de elevación sean 'conditioned_dem' o 'dem_data' según corresponda.
 
         # GRÁFICO 1: MOSAICO DE CARACTERÍSTICAS
-        grid_para_plot = Grid.from_raster(dem_path, nodata=no_data_value)
+        grid_para_plot = Grid.from_raster(dem_path_for_pysheds, nodata=no_data_value)
         grid_para_plot.clip_to(catch)
         plot_extent = grid_para_plot.extent
         fig1, axes = plt.subplots(2, 2, figsize=(12, 10))
@@ -150,7 +175,7 @@ def realizar_analisis_hidrologico_directo(dem_bytes, outlet_coords_wgs84, umbral
         dirmap = {1:(0,1), 2:(1,1), 4:(1,0), 8:(1,-1), 16:(0,-1), 32:(-1,-1), 64:(-1,0), 128:(-1,1)}
         lfp_coords = []
         current_row, current_col = start_row, start_col
-        with rasterio.open(dem_path) as src: raster_transform = src.transform
+        with rasterio.open(dem_path_for_pysheds) as src_pysheds: raster_transform = src_pysheds.transform
         while catch[current_row, current_col]:
             x_coord, y_coord = raster_transform * (current_col, current_row); x_coord += raster_transform.a / 2.0; y_coord += raster_transform.e / 2.0
             lfp_coords.append((x_coord, y_coord))
@@ -162,10 +187,10 @@ def realizar_analisis_hidrologico_directo(dem_bytes, outlet_coords_wgs84, umbral
         stream_mask_strahler = upa > umbral_rio_export
         strahler_orders = flw.stream_order(mask=stream_mask_strahler, type='strahler')
         stream_features = flw.streams(mask=stream_mask_strahler, strord=strahler_orders)
-        gdf_streams_full = gpd.GeoDataFrame.from_features(stream_features, crs=crs)
-        shapes_cuenca_clip = features.shapes(catch.astype(np.uint8), mask=catch, transform=transform)
+        gdf_streams_full = gpd.GeoDataFrame.from_features(stream_features, crs=src_global.crs) # Usamos el CRS original del DEM
+        shapes_cuenca_clip = features.shapes(catch.astype(np.uint8), mask=catch, transform=out_transform) # Usamos out_transform
         cuenca_geom_clip = [Polygon(s['coordinates'][0]) for s, v in shapes_cuenca_clip if v == 1][0]
-        gdf_cuenca_clip = gpd.GeoDataFrame(geometry=[cuenca_geom_clip], crs=crs)
+        gdf_cuenca_clip = gpd.GeoDataFrame(geometry=[cuenca_geom_clip], crs=src_global.crs)
         gdf_streams_recortado = gpd.clip(gdf_streams_full, gdf_cuenca_clip)
         dem_cuenca_recortada = grid_para_plot.view(conditioned_dem, nodata=np.nan)
         fig37, axes = plt.subplots(1, 2, figsize=(18, 9))
@@ -188,7 +213,7 @@ def realizar_analisis_hidrologico_directo(dem_bytes, outlet_coords_wgs84, umbral
         results['plots']['grafico_3_7_lfp_strahler'] = fig_to_base64(fig37)
 
         # GRÁFICO 4: PERFIL LONGITUDINAL Y MÉTRICAS LFP
-        with rasterio.open(dem_path) as src: inv_transform = ~src.transform
+        with rasterio.open(dem_path_for_pysheds) as src_pysheds: inv_transform = ~src_pysheds.transform
         profile_elevations, valid_lfp_coords = [], []
         for x_c, y_c in lfp_coords:
             try:
@@ -219,7 +244,7 @@ def realizar_analisis_hidrologico_directo(dem_bytes, outlet_coords_wgs84, umbral
         ax1.hist(elevaciones_cuenca, bins=50, color='skyblue', edgecolor='black')
         ax1.set_title('Distribución de Elevaciones'); ax1.set_xlabel('Elevación (m)'); ax1.set_ylabel('Frecuencia')
         elev_sorted = np.sort(elevaciones_cuenca)[::-1]
-        cell_area = abs(transform.a * transform.e)
+        cell_area = abs(out_transform.a * out_transform.e) # Usamos out_transform
         area_acumulada = np.arange(1, len(elev_sorted) + 1) * cell_area
         area_normalizada = area_acumulada / area_acumulada.max()
         elev_normalizada = (elev_sorted - elev_sorted.min()) / (elev_sorted.max() - elev_sorted.min())
@@ -234,10 +259,13 @@ def realizar_analisis_hidrologico_directo(dem_bytes, outlet_coords_wgs84, umbral
         results['plots']['grafico_5_6_histo_hipso'] = fig_to_base64(fig56)
 
         # GRÁFICO 11: HAND Y LLANURAS DE INUNDACIÓN
-        upa_km2 = flw.upstream_area(unit='km2')
+        # Para pyflwdir, necesitamos el DEM recortado
+        flw_recortado = pyflwdir.from_dem(data=out_image[0], nodata=no_data_value, transform=out_transform, latlon=False)
+        upa_km2 = flw_recortado.upstream_area(unit='km2')
         upa_min_threshold = 1.0
-        hand = flw.hand(drain=upa_km2 > upa_min_threshold, elevtn=dem_data)
-        floodplains = flw.floodplains(elevtn=dem_data, uparea=upa_km2, upa_min=upa_min_threshold)
+        hand = flw_recortado.hand(drain=upa_km2 > upa_min_threshold, elevtn=out_image[0])
+        floodplains = flw_recortado.floodplains(elevtn=out_image[0], uparea=upa_km2, upa_min=upa_min_threshold)
+        
         dem_background = np.where(catch, conditioned_dem, np.nan)
         hand_masked = np.where(catch & (hand > 0), hand, np.nan)
         floodplains_masked = np.where(catch & (floodplains > 0), 1.0, np.nan)
@@ -269,12 +297,13 @@ def realizar_analisis_hidrologico_directo(dem_bytes, outlet_coords_wgs84, umbral
         gdf_cuenca = gpd.GeoDataFrame({'id': [1], 'geometry': [cuenca_geom_clip]}, crs=output_crs)
         results['downloads']['cuenca'] = gdf_cuenca.to_json()
         river_raster = acc > umbral_rio_export
-        shapes_rios = features.shapes(river_raster.astype(np.uint8), mask=river_raster, transform=transform)
+        shapes_rios = features.shapes(river_raster.astype(np.uint8), mask=river_raster, transform=out_transform) # Usamos out_transform
         river_geoms = [LineString(s['coordinates'][0]) for s, v in shapes_rios if v == 1]
         gdf_rios_full = gpd.GeoDataFrame(geometry=river_geoms, crs=output_crs)
         gdf_rios_recortado = gpd.clip(gdf_rios_full, gdf_cuenca)
         gdf_rios_final = gdf_rios_recortado[gdf_rios_recortado.geom_type == 'LineString']
         results['downloads']['rios'] = gdf_rios_final.to_json()
+        gdf_streams_recortado_clean.crs = output_crs # Aseguramos CRS para exportar
         results['downloads']['rios_strahler'] = gdf_streams_recortado_clean.to_json()
 
         # --- PASO 6: FINALIZAR Y DEVOLVER RESULTADOS ---
@@ -282,52 +311,46 @@ def realizar_analisis_hidrologico_directo(dem_bytes, outlet_coords_wgs84, umbral
         results['message'] = "Cálculo completado con éxito directamente desde la aplicación."
 
     except Exception as e:
-        # Si algo falla, se captura el error detallado para poder depurarlo.
         results['message'] = f"Error en el análisis hidrológico directo: {traceback.format_exc()}"
         results['success'] = False
     finally:
-        # Este bloque es crucial: se asegura de que el archivo temporal se elimine
-        # incluso si el análisis falla.
-        if dem_path and os.path.exists(dem_path):
-            os.remove(dem_path)
+        # Aseguramos que el archivo temporal de PySheds se elimine
+        if 'dem_path_for_pysheds' in locals() and os.path.exists(dem_path_for_pysheds):
+            os.remove(dem_path_for_pysheds)
 
-    # En lugar de imprimir a la consola, la función devuelve el diccionario de resultados.
     return results
 
 # ==============================================================================
 # SECCIÓN 4: FUNCIONES AUXILIARES DE LA PESTAÑA
-# Estas son las funciones originales de dem25_tab.py que preparan los datos
-# para el análisis. No necesitan cambios.
 # ==============================================================================
 
 @st.cache_data(show_spinner="Procesando la cuenca + buffer...")
 def procesar_datos_cuenca(basin_geojson_str):
     try:
-        # --- ¡AQUÍ ESTÁ LA CORRECCIÓN CLAVE! ---
-        # 1. Descargamos el archivo ZIP y obtenemos su ruta local.
+        print("LOG: Iniciando procesar_datos_cuenca...")
+        
+        print("LOG: Descargando/obteniendo ruta de Hojas MTN25...")
         local_zip_path = get_local_path_from_url(HOJAS_MTN25_PATH)
         if not local_zip_path:
-            st.error("No se pudo descargar el archivo de hojas del MTN25 desde la nube.")
+            st.error("No se pudo obtener el archivo de hojas del MTN25 desde el caché.")
             return None
-
-        # 2. Ahora leemos el archivo desde la RUTA LOCAL.
+        print("LOG: Leyendo GDF de Hojas...")
         hojas_gdf = gpd.read_file(local_zip_path)
         
         cuenca_gdf = gpd.read_file(basin_geojson_str).set_crs("EPSG:4326")
         buffer_gdf = gpd.GeoDataFrame(geometry=cuenca_gdf.to_crs("EPSG:25830").buffer(BUFFER_METROS), crs="EPSG:25830")
+        
+        print("LOG: Realizando intersección espacial (sjoin)...")
         geom_para_interseccion = buffer_gdf.to_crs(hojas_gdf.crs)
         hojas = gpd.sjoin(hojas_gdf, geom_para_interseccion, how="inner", predicate="intersects").drop_duplicates(subset=['numero'])
         
-        local_dem_path = DEM_NACIONAL_PATH # <-- NO usamos get_local_path_from_url aquí
-        if not local_dem_path.startswith('http'):
-            st.error("Error interno: La ruta del DEM nacional no es una URL.")
-            return None
-            
-        print(f"LOG: Abriendo DEM Nacional (COG) directamente desde URL: {local_dem_path}...")
-
-        with rasterio.open(local_dem_path) as src: # Rasterio puede abrir la URL directamente
+        # --- ¡CRÍTICO! Abrimos el DEM Nacional (COG) directamente desde la URL con rasterio ---
+        print(f"LOG: Abriendo DEM Nacional (COG) directamente desde URL: {DEM_NACIONAL_PATH}...")
+        with rasterio.open(DEM_NACIONAL_PATH) as src:
             geom_recorte_gdf = buffer_gdf.to_crs(src.crs)
+            print("LOG: Iniciando operación de recorte del DEM (rasterio.mask)...")
             dem_recortado, trans_recortado = mask(dataset=src, shapes=geom_recorte_gdf.geometry, crop=True, nodata=src.nodata or -32768)
+            print("LOG: Operación de recorte del DEM finalizada.")
             meta = src.meta.copy()
             meta.update({"driver": "GTiff", "height": dem_recortado.shape[1], "width": dem_recortado.shape[2], "transform": trans_recortado})
             with io.BytesIO() as buffer:
@@ -340,16 +363,16 @@ def procesar_datos_cuenca(basin_geojson_str):
             st.error("La generación del DEM recortado falló (dem_bytes is None).")
             return None
         
+        print("LOG: Exportando GDF a ZIP...")
         shp_zip_bytes = export_gdf_to_zip(buffer_gdf, "contorno_cuenca_buffer")
+        print("LOG: procesar_datos_cuenca finalizado con éxito.")
         return { "cuenca_gdf": cuenca_gdf, "buffer_gdf": buffer_gdf.to_crs("EPSG:4326"), "hojas": hojas, "dem_bytes": dem_bytes, "dem_array": dem_recortado, "shp_zip_bytes": shp_zip_bytes }
 
     except Exception as e:
-        # --- ¡ESTE ES EL CAMBIO MÁS IMPORTANTE! ---
-        # Si algo falla, mostramos el error completo en la app y en los logs.
         st.error("Ha ocurrido un error inesperado durante el procesamiento de la cuenca.")
-        st.exception(e) # Muestra la traza de error completa en la app.
-        print(traceback.format_exc()) # Imprime la traza en los logs de Render.
-        return None # Detiene la ejecución.
+        st.exception(e)
+        print(f"ERROR TRACEBACK en procesar_datos_cuenca: {traceback.format_exc()}")
+        return None
 
 @st.cache_data(show_spinner="Procesando el polígono dibujado...")
 def procesar_datos_poligono(polygon_geojson_str):
@@ -368,12 +391,9 @@ def procesar_datos_poligono(polygon_geojson_str):
         geom_para_interseccion = poly_gdf.to_crs(hojas_gdf.crs)
         hojas = gpd.sjoin(hojas_gdf, geom_para_interseccion, how="inner", predicate="intersects").drop_duplicates(subset=['numero'])
         
-        local_dem_path = get_local_path_from_url(DEM_NACIONAL_PATH)
-        if not local_dem_path:
-            st.error("No se pudo descargar el DEM nacional desde la nube.")
-            return None
-
-        with rasterio.open(local_dem_path) as src:
+        # --- ¡CRÍTICO! Abrimos el DEM Nacional (COG) directamente desde la URL con rasterio ---
+        print(f"LOG: Abriendo DEM Nacional (COG) directamente desde URL: {DEM_NACIONAL_PATH} para polígono...")
+        with rasterio.open(DEM_NACIONAL_PATH) as src:
             geom_recorte_gdf = poly_gdf.to_crs(src.crs)
             dem_recortado, trans_recortado = mask(dataset=src, shapes=geom_recorte_gdf.geometry, crop=True, nodata=src.nodata or -32768)
             meta = src.meta.copy()
@@ -412,12 +432,22 @@ def export_gdf_to_zip(gdf, filename_base):
 @st.cache_data(show_spinner="Pre-calculando referencia de cauces (pyflwdir)...")
 def precalcular_acumulacion(_dem_bytes):
     try:
-        with rasterio.io.MemoryFile(_dem_bytes) as memfile:
-            with memfile.open() as src:
-                dem_array = src.read(1).astype(np.float32)
-                nodata = src.meta.get('nodata')
-                if nodata is not None: dem_array[dem_array == nodata] = np.nan
-                transform = src.transform
+        # Pyflwdir necesita un archivo local o bytes en memoria.
+        # Si _dem_bytes es una URL, lo descargamos a un MemoryFile.
+        if isinstance(_dem_bytes, str) and _dem_bytes.startswith('http'):
+            with requests.get(_dem_bytes, stream=True) as r:
+                r.raise_for_status()
+                dem_bytes_content = r.content
+            memfile = rasterio.io.MemoryFile(dem_bytes_content)
+        else:
+            memfile = rasterio.io.MemoryFile(_dem_bytes)
+
+        with memfile.open() as src:
+            dem_array = src.read(1).astype(np.float32)
+            nodata = src.meta.get('nodata')
+            if nodata is not None: dem_array[dem_array == nodata] = np.nan
+            transform = src.transform
+        
         flwdir = pyflwdir.from_dem(data=dem_array, transform=transform, nodata=np.nan)
         acc = flwdir.upstream_area(unit='cell')
         acc_limpio = np.nan_to_num(acc, nan=0.0)
@@ -442,47 +472,55 @@ def precalcular_acumulacion(_dem_bytes):
 def render_dem25_tab():
     st.header("Generador de Modelos Digitales del Terreno (MDT25)")
     st.subheader("(from NASA’s Earth Observing System Data and Information System -EOSDIS)")
+    
+    # --- INICIO: LLAMADA A LA FUNCIÓN DE PRE-CALENTAMIENTO ---
+    # Esta función ya no es necesaria aquí, ya que los COGs se leen directamente.
+    # La eliminamos para evitar confusiones y posibles descargas innecesarias.
+    # precalentar_cache_archivos_grandes() 
+    # --- FIN ---
+
     st.info("Esta herramienta identifica las hojas del MTN25 y genera un DEM recortado para la cuenca (con buffer de 5km) o para un área dibujada manualmente.")
 
-    # --- CAMBIO 1: Comprobación más segura al inicio ---
-    # Usamos .get() para evitar errores si 'basin_geojson' no existe o es None
     if not st.session_state.get('basin_geojson'):
         st.warning("⬅️ Por favor, primero calcule una cuenca en la Pestaña 1.")
         st.stop()
 
     if st.button("🗺️ Analizar Hojas y DEM para la Cuenca Actual", use_container_width=True):
-        results = procesar_datos_cuenca(st.session_state.basin_geojson)
+        try:
+            temp_cuenca_gdf = gpd.read_file(st.session_state.basin_geojson).set_crs("EPSG:4326")
+            area_km2 = temp_cuenca_gdf.to_crs("EPSG:25830").area.sum() / 1_000_000
+            if area_km2 > AREA_PROCESSING_LIMIT_KM2:
+                st.error(f"El área de la cuenca calculada ({area_km2:,.0f} km²) es demasiado grande. Límite: {AREA_PROCESSING_LIMIT_KM2:,.0f} km².")
+                st.stop() 
+        except Exception as e:
+            st.error(f"No se pudo verificar el área de la cuenca: {e}")
+            st.stop()
+
+        with st.spinner("Procesando recorte del DEM... Esta operación puede tardar varios segundos. Por favor, espere."):
+            results = procesar_datos_cuenca(st.session_state.basin_geojson)
         
-        # --- CAMBIO 2: Lógica de control de flujo corregida ---
-        # Solo si los resultados son VÁLIDOS, actualizamos el estado y forzamos un rerun.
         if results:
             st.session_state.cuenca_results = results
             st.session_state.processed_basin_id = st.session_state.basin_geojson
-            st.session_state.precalculated_acc = precalcular_acumulacion(results['dem_bytes'])
+            # precalcular_acumulacion ahora recibe los bytes del DEM recortado, no la URL del DEM nacional
+            st.session_state.precalculated_acc = precalcular_acumulacion(results['dem_bytes']) 
             st.session_state.pop('poligono_results', None)
             st.session_state.pop('user_drawn_geojson', None)
             st.session_state.pop('polygon_error_message', None)
             st.session_state.pop('hidro_results_externo', None)
-            st.session_state.show_dem25_content = True # <-- Se activa solo en caso de éxito
+            st.session_state.show_dem25_content = True
             st.rerun()
         else:
-            # Si hay un error, lo mostramos y nos aseguramos de que el contenido no se muestre.
-            st.error("No se pudo procesar la cuenca. Revisa los mensajes de error si los hubiera.")
-            st.session_state.show_dem25_content = False # <-- Se desactiva en caso de error
+            st.error("No se pudo procesar la cuenca. La operación falló o superó el tiempo de espera. Revisa los logs del servidor para más detalles.")
+            st.session_state.show_dem25_content = False
 
-    # --- CAMBIO 3: Doble comprobación antes de renderizar ---
-    # Nos aseguramos de que tanto la bandera para mostrar como los datos existan.
     if not st.session_state.get('show_dem25_content') or not st.session_state.get('cuenca_results'):
         st.stop()
     
-    # A partir de aquí, el código puede asumir de forma segura que 'cuenca_results' existe.
     st.subheader("Mapa de Situación")
     m = folium.Map(tiles="CartoDB positron")
     folium.TileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', attr='Esri', name='Imágenes Satélite').add_to(m)
-    
-    # Ahora esta línea es segura
     cuenca_results = st.session_state.cuenca_results
-    
     folium.GeoJson(cuenca_results['cuenca_gdf'], name="Cuenca", style_function=lambda x: {'color': 'white', 'weight': 2.5}).add_to(m)
     buffer_layer = folium.GeoJson(cuenca_results['buffer_gdf'], name="Buffer Cuenca (5km)", style_function=lambda x: {'color': 'tomato', 'fillOpacity': 0.1}).add_to(m)
     folium.GeoJson(cuenca_results['hojas'], name="Hojas (Cuenca)", style_function=lambda x: {'color': '#ffc107', 'weight': 2, 'fillOpacity': 0.4}).add_to(m)
@@ -598,7 +636,7 @@ def render_dem25_tab():
         # Se llama a la función directa en lugar del subproceso.
         with st.spinner("Ejecutando análisis hidrológico completo... Esto puede tardar unos segundos."):
             results = realizar_analisis_hidrologico_directo(
-                st.session_state.cuenca_results['dem_bytes'],
+                st.session_state.cuenca_results['dem_bytes'], # dem_bytes es ahora el DEM recortado en memoria
                 st.session_state.outlet_coords,
                 umbral_celdas
             )
@@ -620,7 +658,6 @@ def render_dem25_tab():
         st.header("Resultados del Análisis sobre MDT25 en entorno GIS")
 
         try:
-            st.subheader("Visor de Resultados GIS")
             gdf_cuenca = gpd.read_file(results["downloads"]["cuenca"]).to_crs("EPSG:4326")
             gdf_lfp = gpd.read_file(results["downloads"]["lfp"]).to_crs("EPSG:4326")
             gdf_punto = gpd.read_file(results["downloads"]["punto_salida"]).to_crs("EPSG:4326")

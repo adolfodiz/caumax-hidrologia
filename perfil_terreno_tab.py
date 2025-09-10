@@ -1,5 +1,8 @@
-# perfil_terreno_tab.py (Versión Definitiva que respeta el flujo de Streamlit)
+# perfil_terreno_tab.py (Versión adaptada para COGs grandes en Pestaña 3)
 
+# ==============================================================================
+# SECCIÓN 1: IMPORTS (Sin cambios)
+# ==============================================================================
 import streamlit as st
 import os
 import geopandas as gpd
@@ -16,16 +19,15 @@ import plotly.graph_objects as go
 from shapely.geometry import LineString, mapping
 import zipfile
 import tempfile
+import requests # Necesario para descargar a MemoryFile en precalcular_acumulacion
 
-# --- 1. CONFIGURACIÓN Y RUTAS (Sin cambios) ---
-# PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-# DATA_FOLDER = PROJECT_ROOT
+# --- 2. CONFIGURACIÓN Y RUTAS (Sin cambios) ---
 MDT25_PATH = "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/caumax-hidrologia-data/MDT25_peninsula_UTM30N_COG.tif"
 CORINE_VISU_PATH = "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/caumax-hidrologia-data/CORINE_visual_COG.tif"
 CN_HIDRO_PATH = "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/caumax-hidrologia-data/CN_hidrologico_COG.tif"
 CORINE_COLOR_MAP = {111:'#E6004D',112:'#FF0000',121:'#CC4DF2',122:'#CC0000',123:'#E6CCCC',124:'#E6CCE6',131:'#A600CC',132:'#A64DCC',133:'#FF4DFF',141:'#FFA6FF',142:'#FFE6FF',211:'#FFFFA8',212:'#FFFF00',213:'#E6E600',221:'#E68000',222:'#F2A64D',223:'#E6A600',231:'#E6E64D',241:'#FFE6A6',242:'#FFE64D',243:'#E6CC4D',244:'#F2CCA6',311:'#80FF00',312:'#00A600',313:'#4DFF00',321:'#CCF24D',322:'#A6FF80',323:'#A6E64D',324:'#A6F200',331:'#E6E6E6',332:'#CCCCCC',333:'#CCFFCC',334:'#000000',335:'#A6E6CC',411:'#A6A6FF',412:'#4D4DFF',421:'#CCCCFF',422:'#E6E6FF',423:'#A6A6E6',511:'#00CCF2',512:'#80F2E6',521:'#00FFFF',522:'#A6FFFF',523:'#E6FFFF'}
 
-# --- 2. FUNCIONES DE LÓGICA (Sin cambios) ---
+# --- 2. FUNCIONES DE LÓGICA (Adaptadas para COGs grandes) ---
 @st.cache_resource(show_spinner=False)
 def clip_raster_to_geometry(raster_path, _geometry_gdf):
     # Aseguramos que se lee directamente de la URL.
@@ -33,13 +35,17 @@ def clip_raster_to_geometry(raster_path, _geometry_gdf):
         st.error(f"Error interno: La ruta del ráster '{raster_path}' no es una URL.")
         return None, None
     print(f"LOG: Abriendo ráster (COG) directamente desde URL: {raster_path}...")
-    with rasterio.open(raster_path) as src: # Rasterio puede abrir la URL directamente
-        geometry_gdf_reprojected = _geometry_gdf.to_crs(src.crs)
-        try:
+    try:
+        with rasterio.open(raster_path) as src: # Rasterio puede abrir la URL directamente
+            geometry_gdf_reprojected = _geometry_gdf.to_crs(src.crs)
             out_image, out_transform = mask(dataset=src, shapes=geometry_gdf_reprojected.geometry, crop=True, nodata=src.nodata)
             out_meta = src.meta.copy(); out_meta.update({"driver":"GTiff","height":out_image.shape[1],"width":out_image.shape[2],"transform":out_transform,"nodata":src.nodata})
             return out_image, out_meta
-        except ValueError: return None, None
+    except ValueError: return None, None
+    except Exception as e:
+        st.error(f"Error al recortar el ráster {raster_path}: {e}")
+        print(f"ERROR TRACEBACK en clip_raster_to_geometry: {traceback.format_exc()}")
+        return None, None
 
 def raster_to_bytes(raster_image, raster_meta):
     with MemoryFile() as memfile:
@@ -47,8 +53,8 @@ def raster_to_bytes(raster_image, raster_meta):
         return memfile.read()
 
 def sample_rasters_along_line(_line_geom, _rasters_data):
-    # Aseguramos que se lee directamente de la URL.
     # Abrimos los datasets UNA VEZ fuera del bucle.
+    # _rasters_data['dem_bytes'] etc. son ahora las URLs de los COGs.
     dem_src = rasterio.open(_rasters_data['dem_bytes'])
     corine_src = rasterio.open(_rasters_data['corine_bytes'])
     cn_src = rasterio.open(_rasters_data['cn_bytes'])
@@ -60,8 +66,7 @@ def sample_rasters_along_line(_line_geom, _rasters_data):
         point = gdf_line.geometry.iloc[0].interpolate(i / num_samples, normalized=True)
         distance = gdf_line.geometry.iloc[0].project(point)
         
-        # Leemos los valores del ráster AHORA usando los objetos 'src' que abrimos al principio.
-        # Esto es eficiente y correcto.
+        # Leemos los valores del ráster usando los objetos 'src' ya abiertos.
         dem_val = next(dem_src.sample([(point.x, point.y)]))[0]
         corine_val = next(corine_src.sample([(point.x, point.y)]))[0]
         cn_val = next(cn_src.sample([(point.x, point.y)]))[0]
@@ -71,14 +76,14 @@ def sample_rasters_along_line(_line_geom, _rasters_data):
         corine_values.append(corine_val)
         cn_values.append(cn_val if cn_val > 0 else np.nan)
 
-    # Es importante cerrar los datasets al final, ya que los abrimos fuera del bucle.
+    # Es importante cerrar los datasets al final.
     dem_src.close()
     corine_src.close()
     cn_src.close()
     
     return distances, dem_values, corine_values, cn_values
 
-# --- 3. FUNCIÓN PRINCIPAL DE LA PESTAÑA ---
+# --- 3. FUNCIÓN PRINCIPAL DE LA PESTAÑA (Sin cambios significativos en la lógica) ---
 def render_perfil_terreno_tab():
     st.title("🔬 Perfil Interactivo de Terreno y Usos del Suelo")
     st.info("Seleccione o dibuje un perfil. Cualquier nueva selección reemplazará automáticamente a la anterior.")
@@ -111,6 +116,7 @@ def render_perfil_terreno_tab():
         if st.button("🚀 Cargar Datos y Activar Mapa de Perfilado", use_container_width=True):
             with st.spinner(f"Recortando rásters nacionales para: {source_name}..."):
                 geometry_for_clipping = active_geometry_gdf.to_crs("EPSG:4326")
+                # Pasamos las URLs directamente a clip_raster_to_geometry
                 dem_image, dem_meta = clip_raster_to_geometry(MDT25_PATH, geometry_for_clipping)
                 corine_image, corine_meta = clip_raster_to_geometry(CORINE_VISU_PATH, geometry_for_clipping)
                 cn_image, cn_meta = clip_raster_to_geometry(CN_HIDRO_PATH, geometry_for_clipping)
@@ -118,9 +124,13 @@ def render_perfil_terreno_tab():
                 if dem_image is not None and corine_image is not None and cn_image is not None:
                     st.session_state.perfil_data = {
                         "source_name": source_name,
-                        "dem_bytes": raster_to_bytes(dem_image, dem_meta), "corine_bytes": raster_to_bytes(corine_image, corine_meta),
-                        "cn_bytes": raster_to_bytes(cn_image, cn_meta), "bounds": list(geometry_for_clipping.total_bounds),
-                        "dem_meta": dem_meta, "area_geojson": geometry_for_clipping.to_json(), "dem_image": dem_image, "corine_image": corine_image,
+                        # Guardamos las URLs, no los bytes, para sample_rasters_along_line
+                        "dem_bytes": MDT25_PATH, 
+                        "corine_bytes": CORINE_VISU_PATH,
+                        "cn_bytes": CN_HIDRO_PATH, 
+                        "bounds": list(geometry_for_clipping.total_bounds),
+                        "dem_meta": dem_meta, "area_geojson": geometry_for_clipping.to_json(), 
+                        "dem_image": dem_image, "corine_image": corine_image,
                         "cn_image": cn_image, "corine_meta": corine_meta, "cn_meta": cn_meta
                     }
                     st.session_state.profile_map_key += 1
@@ -135,7 +145,8 @@ def render_perfil_terreno_tab():
             st.subheader("MDT25 (ETRS89 UTM Zone30N)"); fig, ax = plt.subplots(); plot_array = data['dem_image'][0].astype('float32'); nodata = data['dem_meta'].get('nodata')
             if nodata is not None: plot_array[plot_array == nodata] = np.nan
             im = ax.imshow(plot_array, cmap='terrain'); fig.colorbar(im, ax=ax, label='Elevación (m)'); ax.set_axis_off(); st.pyplot(fig)
-            st.download_button("📥 Descargar MDT25", data['dem_bytes'], "mdt25_recortado.tif", "image/tiff", use_container_width=True)
+            # Descargamos los bytes del DEM recortado, no la URL del DEM nacional
+            st.download_button("📥 Descargar MDT25", raster_to_bytes(data['dem_image'], data['dem_meta']), "mdt25_recortado.tif", "image/tiff", use_container_width=True)
         with col2:
             st.subheader("CORINE Land Cover"); fig, ax = plt.subplots(); corine_array = data['corine_image'][0]; plot_data = corine_array.astype(float); nodata = data['corine_meta'].get('nodata')
             if nodata is not None: plot_data[plot_data == nodata] = np.nan
@@ -145,49 +156,15 @@ def render_perfil_terreno_tab():
                 im = ax.imshow(plot_data, cmap=cmap, norm=norm)
             else: im = ax.imshow(plot_data)
             ax.set_axis_off(); st.pyplot(fig)
-            st.download_button("📥 Descargar CORINE", data['corine_bytes'], "corine_recortado.tif", "image/tiff", use_container_width=True)
+            st.download_button("📥 Descargar CORINE", raster_to_bytes(data['corine_image'], data['corine_meta']), "corine_recortado.tif", "image/tiff", use_container_width=True)
         with col3:
             st.subheader("Curve Number (CN)"); fig, ax = plt.subplots(); cn_array = data['cn_image'][0].astype('float32'); nodata = data['cn_meta'].get('nodata')
             if nodata is not None: cn_array[cn_array == nodata] = np.nan
             im = ax.imshow(cn_array, cmap='viridis', vmin=40, vmax=100); fig.colorbar(im, ax=ax, label='Valor CN'); ax.set_axis_off(); st.pyplot(fig)
-            st.download_button("📥 Descargar CN", data['cn_bytes'], "cn_recortado.tif", "image/tiff", use_container_width=True)
-
-    # st.header("1. Origen del Perfil")
-    # 
-    # # --- LA CORRECCIÓN CLAVE ---
-    # def handle_profile_upload():
-    #     uploaded_file = st.session_state.get('profile_uploader')
-    #     if not uploaded_file: return
-    #     # El callback ahora SÓLO modifica el session_state.
-    #     # Streamlit se encargará del rerun de forma natural y ordenada.
-    #     tmp_path = None
-    #     try:
-    #         with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp: tmp.write(uploaded_file.getvalue()); tmp_path = tmp.name
-    #         gdf_uploaded = gpd.read_file(f"zip://{tmp_path}")
-    #         if len(gdf_uploaded) != 1 or not ("LineString" in gdf_uploaded.geometry.iloc[0].geom_type):
-    #             st.error("Error: El Shapefile debe contener una única Polilínea (LineString).")
-    #             return
-    #         st.session_state.active_profile_line = gdf_uploaded.to_crs("EPSG:4326").geometry.iloc[0]
-    #         st.session_state.profile_source = 'Shapefile Cargado'
-    #         st.session_state.profile_map_key += 1
-    #         # NO hay st.rerun() aquí.
-    #     except Exception as e: st.error(f"Error al procesar el shapefile: {e}")
-    #     finally:
-    #         if tmp_path and os.path.exists(tmp_path): os.remove(tmp_path)
-    # 
-    # col1, col2 = st.columns(2)
-    # with col1:
-    #     if st.button("Usar Cauce Calculado", use_container_width=True, disabled=not st.session_state.get('main_channel_geojson')):
-    #         st.session_state.active_profile_line = LineString(json.loads(st.session_state.main_channel_geojson)['coordinates'])
-    #         st.session_state.profile_source = 'Cauce Calculado'
-    #         st.session_state.profile_map_key += 1
-    #         st.rerun()
-    # with col2:
-    #     st.file_uploader("Cargar Shapefile (.zip)", type=['zip'], key='profile_uploader', on_change=handle_profile_upload)
+            st.download_button("📥 Descargar CN", raster_to_bytes(data['cn_image'], data['cn_meta']), "cn_recortado.tif", "image/tiff", use_container_width=True)
 
     st.header("1. Origen del Perfil")
 
-    # --- Función de callback para la carga de Shapefile (sin cambios) ---
     def handle_profile_upload():
         uploaded_file = st.session_state.get('profile_uploader')
         if not uploaded_file: return
@@ -207,43 +184,20 @@ def render_perfil_terreno_tab():
     
     col1, col2 = st.columns(2)
     with col1:
-        # --- INICIO: SECCIÓN MODIFICADA ---
-        
-        # Comprobar de forma segura si los datos del LFP existen en el estado de la sesión
         lfp_data_exists = st.session_state.get('hidro_results_externo', {}).get('downloads', {}).get('lfp')
-
-        # El botón ahora se llama "Cargar LFP" y se activa/desactiva según si los datos existen
         if st.button("Cargar LFP (Longuest Flow Path)", use_container_width=True, disabled=not lfp_data_exists):
             try:
-                # Obtener el GeoJSON del LFP desde los resultados de la pestaña anterior
                 lfp_geojson_str = st.session_state.hidro_results_externo['downloads']['lfp']
-                
-                # Cargar el GeoJSON en un GeoDataFrame
                 gdf_lfp = gpd.read_file(lfp_geojson_str)
-                
-                # Reproyectar a WGS84 (EPSG:4326), que es el CRS que usa esta pestaña para dibujar
                 gdf_lfp_wgs84 = gdf_lfp.to_crs("EPSG:4326")
-
-                # Extraer la geometría LineString y guardarla como el perfil activo
                 st.session_state.active_profile_line = gdf_lfp_wgs84.geometry.iloc[0]
-                
-                # Actualizar el nombre de la fuente para que el usuario sepa de dónde viene
                 st.session_state.profile_source = 'LFP Calculado'
-                
-                # Forzar la actualización del mapa y la interfaz
                 st.session_state.profile_map_key += 1
                 st.rerun()
             except Exception as e:
                 st.error(f"No se pudo cargar el LFP: {e}")
-        # --- FIN: SECCIÓN MODIFICADA ---
-
     with col2:
         st.file_uploader("Cargar Shapefile (.zip)", type=['zip'], key='profile_uploader', on_change=handle_profile_upload)
-
-
-
-
-
 
     st.subheader("Dibujar Perfil Manualmente")
     data = st.session_state.perfil_data

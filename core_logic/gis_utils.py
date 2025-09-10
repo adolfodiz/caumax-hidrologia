@@ -92,15 +92,12 @@ def load_geojson_from_gpkg(local_gpkg_path):
         return None
 
 def get_raster_value_at_point(raster_path_url, point_utm):
-    # Esta función SÍ debe usar la lectura directa de URL para COGs grandes
-    if raster_path_url.endswith(('_COG.tif', '_cog.tif', '.tif')) and raster_path_url.startswith('http'):
-        path_to_open = f"/vsicurl/{raster_path_url}" # Usamos /vsicurl/ para lectura directa
-    else:
-        path_to_open = get_local_path_from_url(raster_path_url) # Para otros tipos (gpkg)
-    
-    if not path_to_open: return None
+    # Para los rásters de la Pestaña 1 (que son pequeños) y los de interpolación (FLOW_X, RAIN_X)
+    # se descargan al disco.
+    local_raster_path = get_local_path_from_url(raster_path_url)
+    if not local_raster_path: return None
     try:
-        with rasterio.open(path_to_open) as src:
+        with rasterio.open(local_raster_path) as src:
             point_crs = CRS("EPSG:25830")
             raster_crs = CRS(src.crs)
             if point_crs != raster_crs:
