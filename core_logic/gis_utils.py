@@ -89,7 +89,6 @@ def load_geojson_from_gpkg(local_gpkg_path):
         return None
 
 def get_raster_value_at_point(raster_path_url, point_utm):
-    # --- ¡CORRECCIÓN APLICADA AQUÍ! ---
     # Esta función SÍ debe usar la lectura directa de URL para COGs grandes
     if raster_path_url.endswith(('_COG.tif', '_cog.tif', '.tif')) and raster_path_url.startswith('http'):
         path_to_open = f"/vsicurl/{raster_path_url}" # Usamos /vsicurl/ para lectura directa
@@ -116,7 +115,6 @@ def get_raster_value_at_point(raster_path_url, point_utm):
         return None
 
 def get_vector_feature_at_point(vector_path_url, point_utm):
-    # --- ¡CORRECCIÓN APLICADA AQUÍ! ---
     # Para vectores (gpkg) siempre descargamos
     local_vector_path = get_local_path_from_url(vector_path_url)
     if not local_vector_path: return None
@@ -137,7 +135,8 @@ def get_vector_feature_at_point(vector_path_url, point_utm):
     except Exception as e:
         print(f"ERROR: Fallo al obtener feature vectorial en {vector_path_url} para punto {point_utm}: {e}")
         return None
-
+    
+    
 # --- INICIO: NUEVA FUNCIÓN DE DESCARGA FORZADA ---
 # Usamos un decorador de caché diferente para esta función para evitar conflictos
 @cache_resource(ttl=3600)
