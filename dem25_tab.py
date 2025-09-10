@@ -30,6 +30,7 @@ import pyflwdir
 from rasterio.mask import mask
 from rasterio import features
 import rasterio
+import requests # Necesario para descargar a MemoryFile en precalcular_acumulacion
 from core_logic.gis_utils import get_local_path_from_url # Necesitamos esta para los GPKG y ZIPs
 
 # ==============================================================================
@@ -160,7 +161,7 @@ def realizar_analisis_hidrologico_directo(dem_url, outlet_coords_wgs84, umbral_r
             lfp_coords.append((x_coord, y_coord))
             direction = flowdir[current_row, current_col]
             if direction == 0: break
-            row_move, col_move = dirmap[direction]; current_row += row_move; current_col += col_move
+            row_move, col_move = dirmap[direction]; current_row += row_move; current_col += col_col_move
 
         # GRÁFICO 3/7 UNIFICADO: LFP y Red Fluvial de Strahler
         stream_mask_strahler = upa > umbral_rio_export
@@ -460,63 +461,72 @@ def render_dem25_tab():
 
     # --- INICIO: Lógica para el botón "Analizar Hojas y DEM para la Cuenca Actual" ---
     # Esta lógica ahora gestiona las etapas de procesamiento automáticamente.
+    # Usamos un estado para controlar el flujo de la Pestaña 2
+    if 'dem25_processing_stage' not in st.session_state:
+        st.session_state.dem25_processing_stage = 0 # 0: Inicio, 1: DEM recortado, 2: Acumulación calculada, -1: Error
+
+    # Botón principal para iniciar el procesamiento
     if st.button("🗺️ Analizar Hojas y DEM para la Cuenca Actual", use_container_width=True, key="analyze_dem_button"):
         # Reiniciamos el estado de procesamiento para asegurar un nuevo cálculo
-        st.session_state.dem25_processing_stage = 0 # 0: Inicio, 1: DEM recortado, 2: Acumulación calculada
+        st.session_state.dem25_processing_stage = 0 
         st.session_state.cuenca_results = None
         st.session_state.precalculated_acc = None
         st.session_state.hidro_results_externo = None
-        st.session_state.pop('polygon_error_message', None) # Limpiamos errores de polígono
-        st.session_state.show_dem25_content = False # Ocultamos contenido hasta que esté listo
+        st.session_state.pop('polygon_error_message', None)
+        st.session_state.show_dem25_content = False
+        st.session_state.outlet_coords = None # Limpiamos el punto de salida al iniciar un nuevo análisis
         st.rerun() # Forzamos un rerun para iniciar el procesamiento
 
     # --- Lógica de las etapas de procesamiento ---
     # Etapa 0: Procesar datos de la cuenca (recorte del DEM)
-    if st.session_state.get('dem25_processing_stage', 0) == 0 and st.session_state.get('analyze_dem_button'):
-        try:
-            temp_cuenca_gdf = gpd.read_file(st.session_state.basin_geojson).set_crs("EPSG:4326")
-            area_km2 = temp_cuenca_gdf.to_crs("EPSG:25830").area.sum() / 1_000_000
-            if area_km2 > AREA_PROCESSING_LIMIT_KM2:
-                st.error(f"El área de la cuenca calculada ({area_km2:,.0f} km²) es demasiado grande. Límite: {AREA_PROCESSING_LIMIT_KM2:,.0f} km².")
-                st.session_state.dem25_processing_stage = -1 # Marcar como error
-                st.stop() 
-        except Exception as e:
-            st.error(f"No se pudo verificar el área de la cuenca: {e}")
-            st.session_state.dem25_processing_stage = -1 # Marcar como error
-            st.stop()
+    if st.session_state.dem25_processing_stage == 0:
+        if st.session_state.get('analyze_dem_button'): # Solo si se pulsó el botón
+            try:
+                temp_cuenca_gdf = gpd.read_file(st.session_state.basin_geojson).set_crs("EPSG:4326")
+                area_km2 = temp_cuenca_gdf.to_crs("EPSG:25830").area.sum() / 1_000_000
+                if area_km2 > AREA_PROCESSING_LIMIT_KM2:
+                    st.error(f"El área de la cuenca calculada ({area_km2:,.0f} km²) es demasiado grande. Límite: {AREA_PROCESSING_LIMIT_KM2:,.0f} km².")
+                    st.session_state.dem25_processing_stage = -1
+                    st.stop() 
+            except Exception as e:
+                st.error(f"No se pudo verificar el área de la cuenca: {e}")
+                st.session_state.dem25_processing_stage = -1
+                st.stop()
 
-        with st.spinner("Etapa 1/2: Recortando DEM nacional para el área de la cuenca..."):
-            results = procesar_datos_cuenca(st.session_state.basin_geojson)
-        
-        if results:
-            st.session_state.cuenca_results = results
-            st.session_state.dem25_processing_stage = 1 # Avanzar a la siguiente etapa
-            st.rerun()
+            with st.spinner("Etapa 1/2: Recortando DEM nacional para el área de la cuenca..."):
+                results = procesar_datos_cuenca(st.session_state.basin_geojson)
+            
+            if results:
+                st.session_state.cuenca_results = results
+                st.session_state.dem25_processing_stage = 1 # Avanzar a la siguiente etapa
+                st.rerun() # Forzar rerun para ejecutar la siguiente etapa
+            else:
+                st.error("Error en la Etapa 1: No se pudo procesar la cuenca. Revisa los logs del servidor.")
+                st.session_state.dem25_processing_stage = -1
+                st.stop()
         else:
-            st.error("Error en la Etapa 1: No se pudo procesar la cuenca. Revisa los logs del servidor.")
-            st.session_state.dem25_processing_stage = -1 # Marcar como error
-            st.stop()
+            st.info("Pulse 'Analizar Hojas y DEM para la Cuenca Actual' para iniciar el procesamiento.")
+            st.stop() # Detener si no se ha pulsado el botón y no hay procesamiento en curso
 
     # Etapa 1: Pre-calcular acumulación (PyFlwdir)
-    if st.session_state.get('dem25_processing_stage') == 1:
+    if st.session_state.dem25_processing_stage == 1:
         with st.spinner("Etapa 2/2: Pre-calculando red fluvial para referencia..."):
-            # precalcular_acumulacion ahora recibe los bytes del DEM recortado
             st.session_state.precalculated_acc = precalcular_acumulacion(st.session_state.cuenca_results['dem_bytes']) 
         
         if st.session_state.precalculated_acc is not None:
             st.session_state.dem25_processing_stage = 2 # Avanzar a la etapa final de visualización
             st.session_state.show_dem25_content = True # Ahora sí, mostrar el contenido
-            st.rerun()
+            st.rerun() # Forzar rerun para mostrar el mapa interactivo
         else:
             st.error("Error en la Etapa 2: Falló el pre-cálculo de la red fluvial.")
-            st.session_state.dem25_processing_stage = -1 # Marcar como error
+            st.session_state.dem25_processing_stage = -1
             st.stop()
     # --- FIN: Lógica para el botón "Analizar Hojas y DEM para la Cuenca Actual" ---
 
 
-    # --- Contenido principal de la pestaña (solo se muestra si el procesamiento ha terminado) ---
-    if not st.session_state.get('show_dem25_content') or not st.session_state.get('cuenca_results'):
-        st.stop() # Detener si no estamos listos para mostrar el contenido
+    # --- Contenido principal de la pestaña (solo se muestra si el procesamiento ha terminado con éxito) ---
+    if not st.session_state.get('show_dem25_content') or not st.session_state.get('cuenca_results') or st.session_state.dem25_processing_stage == -1:
+        st.stop() # Detener si no estamos listos o hay un error
     
     st.subheader("Mapa de Situación")
     m = folium.Map(tiles="CartoDB positron", zoom_start=10) # Añadido zoom_start para mejor visualización inicial
@@ -542,19 +552,19 @@ def render_dem25_tab():
         img_url = f"data:image/png;base64,{img_str}"
         folium.raster_layers.ImageOverlay(image=img_url, bounds=[[bounds[1], bounds[0]], [bounds[3], bounds[2]]], opacity=0.6, name='Referencia de Cauces (Acumulación)').add_to(m)
 
-    if 'outlet_coords' in st.session_state:
+    # --- ¡CORRECCIÓN DEL ERROR! Comprobamos si outlet_coords existe y no es None ---
+    if st.session_state.get('outlet_coords') is not None:
         coords = st.session_state.outlet_coords
-        # --- ¡CORRECCIÓN DEL ERROR! Comprobamos si coords es None antes de acceder a sus claves ---
-        if coords is not None:
-            folium.Marker([coords['lat'], coords['lng']], popup="Punto de Salida Seleccionado", icon=folium.Icon(color='orange')).add_to(m)
+        folium.Marker([coords['lat'], coords['lng']], popup="Punto de Salida Seleccionado", icon=folium.Icon(color='orange')).add_to(m)
     
     folium.LayerControl().add_to(m)
     map_output_select = st_folium(m, key="map_select", use_container_width=True, height=800, returned_objects=['last_clicked'])
 
     if map_output_select and map_output_select.get("last_clicked"):
+        # Solo actualizamos si el clic es diferente para evitar reruns innecesarios
         if st.session_state.get('outlet_coords') != map_output_select["last_clicked"]:
             st.session_state.outlet_coords = map_output_select["last_clicked"]
-            st.rerun()
+            st.rerun() # Forzamos rerun para que el marcador se dibuje y el botón se habilite
 
     # --- SECCIÓN DE CÁLCULO Y VISUALIZACIÓN (MODIFICADA PARA USAR LA FUNCIÓN DIRECTA) ---
     st.subheader("Paso 2: Cálculos GIS y Análisis de precisión")
@@ -584,7 +594,7 @@ def render_dem25_tab():
         elif results:
             st.error(f"El análisis reportó un error:")
             st.code(results.get("message", "Error desconocido."), language='bash')
-        st.rerun()
+        st.rerun() # Forzamos rerun para mostrar los resultados del análisis hidrológico
 
     # --- La lógica para mostrar los resultados permanece igual, ya que la estructura del
     #     diccionario 'results' es idéntica a la que devolvía el script original.
