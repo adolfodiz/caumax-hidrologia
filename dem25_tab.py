@@ -330,6 +330,7 @@ def realizar_analisis_hidrologico_directo(dem_url, outlet_coords_wgs84, umbral_r
     # 
     # return results
 
+
     except Exception as e:
         # Aseguramos que 'results' sea un diccionario antes de intentar asignarle un mensaje
         if not isinstance(results, dict):
@@ -381,10 +382,15 @@ def procesar_datos_cuenca(basin_geojson_str):
         with rasterio.open(DEM_NACIONAL_PATH) as src:
             geom_recorte_gdf = buffer_gdf.to_crs(src.crs)
             print("LOG: Iniciando operación de recorte del DEM (rasterio.mask)...")
+      
             dem_recortado, trans_recortado = mask(dataset=src, shapes=geom_recorte_gdf.geometry, crop=True, nodata=src.nodata or -32768)
-            print(f"LOG: Resolución del DEM recortado: {trans_recortado[1]}x{abs(trans_recortado[5])}")
-            meta = src.meta.copy()
-            meta.update({"driver": "GTiff", "height": dem_recortado.shape[1], "width": dem_recortado.shape[2], "transform": trans_recortado, "compress": "NONE"}) # <-- Añadir "compress": "NONE"
+            # El GeoTransform es una tupla (top_left_x, pixel_width, rotation_x, top_left_y, rotation_y, pixel_height)
+            # pixel_width es trans_recortado[1] y pixel_height es trans_recortado[5]
+            print(f"DEBUG: generar_dem - Operación de recorte del DEM finalizada. Resolución de píxel: {trans_recortado[1]}x{abs(trans_recortado[5])}. Shape: {dem_recortado.shape}") # <-- Print corregido
+            
+            meta = src.meta.copy(); 
+            meta.update({"driver": "GTiff", "height": dem_recortado.shape[1], "width": dem_recortado.shape[2], "transform": trans_recortado, "compress": "NONE"})            
+            
             with io.BytesIO() as buffer:
                 with rasterio.open(buffer, 'w', **meta) as dst:
                     dst.write(dem_recortado)
