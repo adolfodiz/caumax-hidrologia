@@ -67,50 +67,57 @@ def realizar_analisis_hidrologico_directo(dem_url, outlet_coords_wgs84, umbral_r
     }
     
 def realizar_analisis_hidrologico_directo(dem_url, outlet_coords_wgs84, umbral_rio_export):
-    results = {
-        "success": False, "message": "", "plots": {}, "downloads": {},
-        "lfp_metrics": {}, "hypsometric_data": {}, "lfp_profile_data": {}
-    }
-    
+    results = { ... }
     try:
-        if dem_url is None: # <-- Comprobación de seguridad
+        if dem_url is None: # Comprobación de seguridad
             results['message'] = "Error: El DEM de entrada para el análisis hidrológico es None."
             print("ERROR: realizar_analisis_hidrologico_directo - dem_url es None.")
             return results
 
-        # --- ¡CORRECCIÓN CRÍTICA AQUÍ! ---
-        # dem_url es un objeto 'bytes' (el contenido del GeoTIFF recortado).
-        # rasterio.open necesita un path o un MemoryFile para abrir bytes.
-        with rasterio.io.MemoryFile(dem_url) as memfile: # <-- Envuelve los bytes en MemoryFile
-            with memfile.open() as src_global: # <-- Abre el MemoryFile
-                print(f"DEBUG: realizar_analisis_hidrologico_directo - DEM global abierto desde MemoryFile. CRS: {src_global.crs}") # <-- Nuevo print
-
-                # Transformamos las coordenadas de WGS84 a ETRS89 UTM 30N (CRS del DEM)
+        with rasterio.io.MemoryFile(dem_url) as memfile:
+            with memfile.open() as src_global:
+                print(f"DEBUG: realizar_analisis_hidrologico_directo - DEM global abierto desde MemoryFile. CRS: {src_global.crs}, Bounds: {src_global.bounds}") # <-- Añadir bounds
+                
                 transformer_wgs84_to_dem_crs = Transformer.from_crs("EPSG:4326", src_global.crs, always_xy=True)
                 x_dem_crs, y_dem_crs = transformer_wgs84_to_dem_crs.transform(outlet_coords_wgs84['lng'], outlet_coords_wgs84['lat'])
+                print(f"DEBUG: realizar_analisis_hidrologico_directo - Outlet UTM: ({x_dem_crs}, {y_dem_crs})") # <-- Nuevo print
 
-                # Definimos un pequeño buffer alrededor del punto para el procesamiento de PySheds
-                # Esto evita cargar el DEM nacional completo en memoria para PySheds.
-                buffer_size_for_pysheds = 5000 # 5km de buffer alrededor del punto
+                buffer_size_for_pysheds = 5000
                 bbox_utm = (x_dem_crs - buffer_size_for_pysheds, y_dem_crs - buffer_size_for_pysheds,
                             x_dem_crs + buffer_size_for_pysheds, y_dem_crs + buffer_size_for_pysheds)
+                print(f"DEBUG: realizar_analisis_hidrologico_directo - BBox para recorte PySheds: {bbox_utm}") # <-- Nuevo print
                 
-                # Recortamos un pequeño trozo del DEM para PySheds
-                # Aseguramos que el recorte se haga con la resolución base si es posible
-                out_image, out_transform = mask(src_global, [Polygon.from_bounds(*bbox_utm)], crop=True, nodata=src_global.nodata)
-                out_meta = src_global.meta.copy()
-                out_meta.update({"driver": "GTiff", "height": out_image.shape[1], "width": out_image.shape[2], "transform": out_transform, "compress": "NONE"}) # <-- Añadir compress: NONE aquí también
+                # --- Verificar si el bbox está dentro de src_global.bounds ---
+                if not src_global.bounds.intersects(Polygon.from_bounds(*bbox_utm)):
+                    results['message'] = "Error: El punto de desagüe y su buffer están fuera del DEM recortado de la cuenca. Intente un punto más central."
+                    print(f"ERROR: realizar_analisis_hidrologico_directo - BBox de PySheds fuera de los límites del DEM global. src_global.bounds: {src_global.bounds}") # <-- Nuevo print
+                    return results
 
-                # Guardamos este pequeño trozo en un archivo temporal para PySheds
+                out_image, out_transform = mask(src_global, [Polygon.from_bounds(*bbox_utm)], crop=True, nodata=src_global.nodata)
+                print(f"DEBUG: realizar_analisis_hidrologico_directo - out_image.shape después de mask: {out_image.shape}") # <-- Nuevo print
+                print(f"DEBUG: realizar_analisis_hidrologico_directo - out_transform después de mask: {out_transform}") # <-- Nuevo print
+                
+                if out_image.size == 0 or out_image.shape[1] == 0 or out_image.shape[2] == 0: # <-- Nueva comprobación
+                    results['message'] = "Error: El recorte del DEM para PySheds resultó en una imagen vacía o inválida."
+                    print(f"ERROR: realizar_analisis_hidrologico_directo - out_image está vacío o inválido: {out_image.shape}") # <-- Nuevo print
+                    return results
+
+                out_meta = src_global.meta.copy()
+                out_meta.update({"driver": "GTiff", "height": out_image.shape[1], "width": out_image.shape[2], "transform": out_transform, "compress": "NONE"})
+
                 with tempfile.NamedTemporaryFile(delete=False, suffix='.tif') as tmp_dem_pysheds:
                     with rasterio.open(tmp_dem_pysheds.name, 'w', **out_meta) as dst:
                         dst.write(out_image)
                     dem_path_for_pysheds = tmp_dem_pysheds.name
+                print(f"DEBUG: realizar_analisis_hidrologico_directo - DEM temporal para PySheds guardado en: {dem_path_for_pysheds}") # <-- Nuevo print
 
         # --- PASO 2: PROCESAMIENTO HIDROLÓGICO CON PYSHEDS (CÓDIGO ORIGINAL) ---
         no_data_value = out_meta.get('nodata', -32768)
+        print(f"DEBUG: realizar_analisis_hidrologico_directo - Iniciando Grid.from_raster con {dem_path_for_pysheds}") # <-- Nuevo print
         grid = Grid.from_raster(dem_path_for_pysheds, nodata=no_data_value)
+        print(f"DEBUG: realizar_analisis_hidrologico_directo - Grid creado. Extent: {grid.extent}") # <-- Nuevo print
         dem = grid.read_raster(dem_path_for_pysheds, nodata=no_data_value)
+        print(f"DEBUG: realizar_analisis_hidrologico_directo - DEM leído por Grid. Shape: {dem.shape}") # <-- Nuevo print
 
         # Ajustamos las coordenadas del punto de salida al nuevo DEM recortado
         x_snap, y_snap = grid.snap_to_mask(grid.accumulation(grid.flowdir(grid.fill_depressions(grid.fill_pits(dem)))) > umbral_rio_export, (x_dem_crs, y_dem_crs))
