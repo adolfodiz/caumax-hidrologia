@@ -66,7 +66,7 @@ def realizar_analisis_hidrologico_directo(dem_url, outlet_coords_wgs84, umbral_r
         "lfp_metrics": {}, "hypsometric_data": {}, "lfp_profile_data": {}
     }
     
-def realizar_analisis_hidrológico_directo(dem_url, outlet_coords_wgs84, umbral_rio_export):
+def realizar_analisis_hidrologico_directo(dem_url, outlet_coords_wgs84, umbral_rio_export):
     results = {
         "success": False, "message": "", "plots": {}, "downloads": {},
         "lfp_metrics": {}, "hypsometric_data": {}, "lfp_profile_data": {}
