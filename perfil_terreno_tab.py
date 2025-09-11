@@ -93,7 +93,7 @@ def render_perfil_terreno_tab():
 
     active_geometry_gdf = None
     source_name = "Ninguna"
-    if 'poligono_results' in st.session_state and "error" not in (st.session_state.poligono_results or {}):
+    if st.session_state.get('poligono_results') is not None and "error" not in st.session_state.poligono_results:
         active_geometry_gdf = st.session_state.poligono_results.get('poligono_gdf')
         source_name = "Polígono Manual"
     elif 'cuenca_results' in st.session_state:
