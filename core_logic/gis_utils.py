@@ -36,31 +36,68 @@ LAYER_MAPPING = {
 
 _temp_dir = tempfile.TemporaryDirectory()
 
+# @st.cache_resource(ttl=3600)
+# def get_local_path_from_url(url):
+#     """
+#     Toma una URL, descarga el archivo a un directorio temporal persistente
+#     y devuelve la RUTA LOCAL a ese archivo.
+#     """
+#     try:
+#         filename = os.path.basename(url)
+#         local_path = os.path.join(_temp_dir.name, filename)
+# 
+#         if os.path.exists(local_path) and os.path.getsize(local_path) > 0:
+#             return local_path
+# 
+#         with requests.get(url, stream=True) as r:
+#             r.raise_for_status()
+#             with open(local_path, 'wb') as f:
+#                 for chunk in r.iter_content(chunk_size=8192):
+#                     f.write(chunk)
+#         
+#         if os.path.getsize(local_path) == 0:
+#             return None
+# 
+#         return local_path
+#     except Exception as e:
+#         print(f"Error crítico durante la descarga del archivo {url}: {e}")
+#         return None
+
 @st.cache_resource(ttl=3600)
 def get_local_path_from_url(url):
     """
     Toma una URL, descarga el archivo a un directorio temporal persistente
     y devuelve la RUTA LOCAL a ese archivo.
     """
+    print(f"DEBUG: get_local_path_from_url - Intentando obtener ruta local para URL: {url}") # <-- Nuevo print
     try:
         filename = os.path.basename(url)
         local_path = os.path.join(_temp_dir.name, filename)
 
         if os.path.exists(local_path) and os.path.getsize(local_path) > 0:
+            print(f"DEBUG: get_local_path_from_url - Archivo ya existe localmente: {local_path}") # <-- Nuevo print
             return local_path
 
-        with requests.get(url, stream=True) as r:
-            r.raise_for_status()
+        print(f"DEBUG: get_local_path_from_url - Descargando archivo a: {local_path}") # <-- Nuevo print
+        with requests.get(url, stream=True, timeout=30) as r: # <-- Añadir timeout
+            r.raise_for_status() # Esto lanzará un error si la descarga no es 200 OK
             with open(local_path, 'wb') as f:
                 for chunk in r.iter_content(chunk_size=8192):
                     f.write(chunk)
         
         if os.path.getsize(local_path) == 0:
+            print(f"ERROR: get_local_path_from_url - Archivo descargado está vacío: {local_path}") # <-- Nuevo print
             return None
 
+        print(f"DEBUG: get_local_path_from_url - Descarga exitosa. Ruta local: {local_path}") # <-- Nuevo print
         return local_path
+    except requests.exceptions.RequestException as e:
+        print(f"ERROR: get_local_path_from_url - Error de red/descarga para {url}: {e}") # <-- Nuevo print
+        return None
     except Exception as e:
-        print(f"Error crítico durante la descarga del archivo {url}: {e}")
+        print(f"ERROR: get_local_path_from_url - Error crítico inesperado durante la descarga de {url}: {e}") # <-- Nuevo print
+        import traceback
+        print(traceback.format_exc()) # <-- Imprimir traceback completo
         return None
 
 def get_layer_path(layer_key):
