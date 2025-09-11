@@ -86,12 +86,17 @@ def realizar_analisis_hidrologico_directo(dem_url, outlet_coords_wgs84, umbral_r
                 bbox_utm = (x_dem_crs - buffer_size_for_pysheds, y_dem_crs - buffer_size_for_pysheds,
                             x_dem_crs + buffer_size_for_pysheds, y_dem_crs + buffer_size_for_pysheds)
                 print(f"DEBUG: realizar_analisis_hidrologico_directo - BBox para recorte PySheds: {bbox_utm}") # <-- Nuevo print
-                
+
                 # --- Verificar si el bbox está dentro de src_global.bounds ---
-                if not src_global.bounds.intersects(Polygon.from_bounds(*bbox_utm)):
-                    results['message'] = "Error: El punto de desagüe y su buffer están fuera del DEM recortado de la cuenca. Intente un punto más central."
-                    print(f"ERROR: realizar_analisis_hidrologico_directo - BBox de PySheds fuera de los límites del DEM global. src_global.bounds: {src_global.bounds}") # <-- Nuevo print
-                    return results
+                # src_global.bounds es un BoundingBox, no un objeto Shapely.
+                # Convertimos ambos a objetos Polygon para usar 'intersects'.
+                # src_global_polygon = Polygon.from_bounds(*src_global.bounds) # <-- Comentado
+                # bbox_utm_polygon = Polygon.from_bounds(*bbox_utm) # <-- Comentado
+
+                # if not src_global_polygon.intersects(bbox_utm_polygon): # <-- Comentado
+                #     results['message'] = "Error: El punto de desagüe y su buffer están fuera del DEM recortado de la cuenca. Intente un punto más central."
+                #     print(f"ERROR: realizar_analisis_hidrologico_directo - BBox de PySheds fuera de los límites del DEM global. src_global.bounds: {src_global.bounds}")
+                #     return results
 
                 out_image, out_transform = mask(src_global, [Polygon.from_bounds(*bbox_utm)], crop=True, nodata=src_global.nodata)
                 print(f"DEBUG: realizar_analisis_hidrologico_directo - out_image.shape después de mask: {out_image.shape}") # <-- Nuevo print
@@ -315,15 +320,37 @@ def realizar_analisis_hidrologico_directo(dem_url, outlet_coords_wgs84, umbral_r
         results['success'] = True
         results['message'] = "Cálculo completado con éxito directamente desde la aplicación."
 
+    # except Exception as e:
+    #     results['message'] = f"Error en el análisis hidrológico directo: {traceback.format_exc()}"
+    #     results['success'] = False
+    # finally:
+    #     # Aseguramos que el archivo temporal de PySheds se elimine
+    #     if 'dem_path_for_pysheds' in locals() and os.path.exists(dem_path_for_pysheds):
+    #         os.remove(dem_path_for_pysheds)
+    # 
+    # return results
+
     except Exception as e:
-        results['message'] = f"Error en el análisis hidrológico directo: {traceback.format_exc()}"
+        # Aseguramos que 'results' sea un diccionario antes de intentar asignarle un mensaje
+        if not isinstance(results, dict):
+            results = {"success": False} # Re-inicializar si no es un dict
+        
+        results['message'] = f"Error en el análisis hidrológico directo: {e}\n{traceback.format_exc()}"
         results['success'] = False
+        print(f"ERROR: realizar_analisis_hidrologico_directo - Error general capturado: {e}")
+        print(traceback.format_exc())
     finally:
         # Aseguramos que el archivo temporal de PySheds se elimine
+        # dem_path_for_pysheds solo se define si el bloque try se ejecuta hasta cierto punto.
+        # Es más seguro verificar si existe en locals() antes de intentar eliminarlo.
         if 'dem_path_for_pysheds' in locals() and os.path.exists(dem_path_for_pysheds):
-            os.remove(dem_path_for_pysheds)
-
+            try:
+                os.remove(dem_path_for_pysheds)
+                print(f"DEBUG: Archivo temporal eliminado: {dem_path_for_pysheds}")
+            except Exception as cleanup_e:
+                print(f"ERROR: Fallo al eliminar archivo temporal {dem_path_for_pysheds}: {cleanup_e}")
     return results
+
 
 # ==============================================================================
 # SECCIÓN 4: FUNCIONES AUXILIARES DE LA PESTAÑA
