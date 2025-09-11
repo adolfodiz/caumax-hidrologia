@@ -433,13 +433,30 @@ def precalcular_acumulacion(_dem_bytes):
         acc = flwdir.upstream_area(unit='cell')
         acc_limpio = np.nan_to_num(acc, nan=0.0)
         acc_limpio = np.where(acc_limpio < 0, 0, acc_limpio)
-        log_acc = np.log1p(acc_limpio)
-        min_val, max_val = np.nanmin(log_acc), np.nanmax(log_acc)
+
+        # Nuevo: Usar una transformación de potencia (corrección gamma) para aumentar el contraste
+        # y hacer los píxeles de los cauces más evidentes para la selección.
+        # Un exponente pequeño (ej. 0.2) realza los valores altos de acumulación,
+        # haciendo que los píxeles individuales de la red fluvial sean más nítidos.
+        power_factor = 0.2 # Valor recomendado para realce de contraste. Ajustar si es necesario (0.1 para más, 0.3 para menos).
+        scaled_acc_for_viz = acc_limpio ** power_factor # <-- Nueva línea para la transformación de potencia
+        
+        min_val, max_val = np.nanmin(scaled_acc_for_viz), np.nanmax(scaled_acc_for_viz) # <-- Usar la nueva variable aquí
+        
         if max_val == min_val:
-            img_acc = np.zeros_like(log_acc, dtype=np.uint8)
+            # Evitar división por cero si el ráster es plano
+            img_acc = np.zeros_like(scaled_acc_for_viz, dtype=np.uint8) # <-- Usar la nueva variable aquí
         else:
-            log_acc_nan_as_zero = np.nan_to_num(log_acc, nan=min_val)
-            img_acc = (255 * (log_acc_nan_as_zero - min_val) / (max_val - min_val)).astype(np.uint8)
+            # Normalizar los valores a un rango de 0-255 para crear una imagen en escala de grises
+            scaled_acc_nan_as_zero = np.nan_to_num(scaled_acc_for_viz, nan=min_val) # <-- Usar la nueva variable aquí
+            img_acc = (255 * (scaled_acc_nan_as_zero - min_val) / (max_val - min_val)).astype(np.uint8)
+        # log_acc = np.log1p(acc_limpio)
+        # min_val, max_val = np.nanmin(log_acc), np.nanmax(log_acc)
+        # if max_val == min_val:
+        #     img_acc = np.zeros_like(log_acc, dtype=np.uint8)
+        # else:
+        #     log_acc_nan_as_zero = np.nan_to_num(log_acc, nan=min_val)
+        #     img_acc = (255 * (log_acc_nan_as_zero - min_val) / (max_val - min_val)).astype(np.uint8)
         return img_acc
     except Exception as e:
         st.error(f"Error en el pre-cálculo con pyflwdir: {e}")
