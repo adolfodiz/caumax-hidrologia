@@ -331,7 +331,7 @@ def procesar_datos_cuenca(basin_geojson_str):
             geom_recorte_gdf = buffer_gdf.to_crs(src.crs)
             print("LOG: Iniciando operación de recorte del DEM (rasterio.mask)...")
             dem_recortado, trans_recortado = mask(dataset=src, shapes=geom_recorte_gdf.geometry, crop=True, nodata=src.nodata or -32768)
-            print("LOG: Operación de recorte del DEM finalizada.")
+            print(f"LOG: Resolución del DEM recortado: {trans_recortado[1]}x{abs(trans_recortado[5])}")
             meta = src.meta.copy()
             meta.update({"driver": "GTiff", "height": dem_recortado.shape[1], "width": dem_recortado.shape[2], "transform": trans_recortado, "compress": "NONE"}) # <-- Añadir "compress": "NONE"
             with io.BytesIO() as buffer:
@@ -536,7 +536,11 @@ def render_dem25_tab():
     folium.LayerControl().add_to(m)
     map_output = st_folium(m, use_container_width=True, height=800, returned_objects=['all_drawings'])
     if st.session_state.get("drawing_mode_active") and map_output.get("all_drawings"):
-        st.session_state.user_drawn_geojson = json.dumps(map_output["all_drawings"][0]['geometry']); st.session_state.drawing_mode_active = False; st.rerun()
+        # Añadir un print para verificar el contenido
+        print(f"DEBUG: Dibujo completado. GeoJSON: {json.dumps(map_output['all_drawings'][0]['geometry'])}") # <-- Añadir este print        
+        st.session_state.user_drawn_geojson = json.dumps(map_output["all_drawings"][0]['geometry']); 
+        st.session_state.drawing_mode_active = False; 
+        st.rerun() # <-- Asegurarse de que este rerun esté presente
 
     with st.expander("📝 Herramientas de Dibujo para un área personalizada"):
         c1, c2, c3 = st.columns([2, 2, 3])

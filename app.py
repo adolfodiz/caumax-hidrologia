@@ -2,7 +2,7 @@
 
 import streamlit as st
 # --- Interfaz de Usuario de Streamlit ---
-st.set_page_config(layout="wide", page_title="Calculadora Hidrológica y GIS")
+st.set_page_config(layout="wide", page_title="Caumax con GIS hidrológico")
 import threading
 import time
 import json
@@ -398,7 +398,7 @@ with st.sidebar:
     else:
         st.markdown("Seleccione un punto y calcule para ver la información.")
 
-st.title("Calculadora Hidrológica CAUMAX y Herramientas GIS")
+st.title("CAUMAX y Herramientas Hidrológicas GIS")
 st.header("Mapa Interactivo")
 st.info("💡 **Consejo:** Para obtener los mejores resultados, haga clic directamente sobre o muy cerca de los cauces azules (Red Fluvial) superpuestos en el mapa.")
 m = folium.Map(location=st.session_state.map_center, zoom_start=st.session_state.map_zoom, tiles='OpenStreetMap')
@@ -426,7 +426,8 @@ if st_map_output and st_map_output.get("last_clicked") is not None:
     st.rerun()
 
 
-tab1, tab2, tab3, tab4 = st.tabs(["Cálculo de Caudal (CAUMAX)", "Generador DEM CNIG", "Perfil de Terreno", "Analizador HEC-HMS"])
+# tab1, tab2, tab3, tab4 = st.tabs(["Cálculo de Caudal (CAUMAX)", "Generador DEM CNIG", "Perfil de Terreno", "Analizador HEC-HMS"])
+tab1, tab2 = st.tabs(["Cálculo de Caudal (CAUMAX)", "Generador DEM CNIG"])
 
 # --- INICIO: BLOQUE DE CÓDIGO PARA PESTAÑA 1 (TU CÓDIGO ANTIGUO, RESTAURADO) ---
 with tab1:
@@ -673,5 +674,5 @@ with tab1:
         st.info("Seleccione un punto en el mapa y haga clic en 'Calcular Caudal' en el panel izquierdo.")
 
 with tab2: render_dem25_tab()
-with tab3: render_perfil_terreno_tab()
-with tab4: gis_tabs.render_hms_tab()
+# with tab3: render_perfil_terreno_tab()
+# with tab4: gis_tabs.render_hms_tab()
