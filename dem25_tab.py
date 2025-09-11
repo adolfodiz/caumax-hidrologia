@@ -66,7 +66,13 @@ def realizar_analisis_hidrologico_directo(dem_url, outlet_coords_wgs84, umbral_r
         "lfp_metrics": {}, "hypsometric_data": {}, "lfp_profile_data": {}
     }
     
-try:
+def realizar_analisis_hidrológico_directo(dem_url, outlet_coords_wgs84, umbral_rio_export):
+    results = {
+        "success": False, "message": "", "plots": {}, "downloads": {},
+        "lfp_metrics": {}, "hypsometric_data": {}, "lfp_profile_data": {}
+    }
+    
+    try:
         if dem_url is None: # <-- Comprobación de seguridad
             results['message'] = "Error: El DEM de entrada para el análisis hidrológico es None."
             print("ERROR: realizar_analisis_hidrologico_directo - dem_url es None.")
