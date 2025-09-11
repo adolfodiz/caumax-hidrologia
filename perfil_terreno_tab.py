@@ -91,18 +91,32 @@ def render_perfil_terreno_tab():
     if 'profile_map_key' not in st.session_state:
         st.session_state.profile_map_key = 0
 
+    # --- INICIO: Bloque de inicialización y determinación de geometría activa ---
     active_geometry_gdf = None
-    source_name = "Ninguna"
-    if st.session_state.get('poligono_results') is not None and "error" not in st.session_state.poligono_results:
-        active_geometry_gdf = st.session_state.poligono_results.get('poligono_gdf')
-        source_name = "Polígono Manual"
-    elif 'cuenca_results' in st.session_state:
-        active_geometry_gdf = st.session_state.cuenca_results.get('buffer_gdf')
-        source_name = "Cuenca + Buffer (5km)"
+    source_name = "Ninguna" # Inicializamos source_name con un valor por defecto
 
+    # Lógica para determinar la geometría activa y su nombre
+    if st.session_state.profile_source == 'Cuenca Calculada':
+        # Comprobación robusta para cuenca_results
+        if st.session_state.get('cuenca_results') is not None:
+            active_geometry_gdf = st.session_state.cuenca_results.get('buffer_gdf')
+            if active_geometry_gdf is not None: # Solo si se encontró la geometría
+                source_name = "Cuenca + Buffer (5km)"
+        # Si cuenca_results es None o buffer_gdf es None, active_geometry_gdf y source_name se mantienen como None/"Ninguna"
+    elif st.session_state.profile_source == 'Polígono Dibujado':
+        # Comprobación robusta para poligono_results
+        if st.session_state.get('poligono_results') is not None and "error" not in st.session_state.poligono_results:
+            active_geometry_gdf = st.session_state.poligono_results.get('poligono_gdf')
+            if active_geometry_gdf is not None: # Solo si se encontró la geometría
+                source_name = "Polígono Manual"
+        # Si poligono_results es None o poligono_gdf es None, active_geometry_gdf y source_name se mantienen como None/"Ninguna"
+    # --- FIN: Bloque de inicialización y determinación de geometría activa ---
+
+    # --- INICIO: Manejo de caso sin geometría activa ---
     if active_geometry_gdf is None:
-        st.warning("Primero debe analizar una cuenca en la pestaña 'Generador DEM CNIG'.")
-        st.stop()
+        st.warning("Primero debe analizar una cuenca en la pestaña 'Generador DEM CNIG' o dibujar un polígono.")
+        return # <-- Usamos 'return' en lugar de 'st.stop()'
+    # --- FIN: Manejo de caso sin geometría activa ---
 
     st.success(f"**Área activa para el análisis y recorte:** {source_name}")
     
