@@ -20,6 +20,7 @@ from shapely.geometry import LineString, mapping
 import zipfile
 import tempfile
 import requests # Necesario para descargar a MemoryFile en precalcular_acumulacion
+import traceback
 
 # --- 2. CONFIGURACIÓN Y RUTAS (Sin cambios) ---
 MDT25_PATH = "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/MDT25_peninsula_UTM30N.tif"

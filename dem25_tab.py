@@ -31,6 +31,7 @@ from rasterio.mask import mask
 from rasterio import features
 import rasterio
 from core_logic.gis_utils import get_local_path_from_url # Necesitamos esta para los GPKG y ZIPs
+import requests
 
 # ==============================================================================
 # SECCIÓN 2: CONSTANTES Y CONFIGURACIÓN
