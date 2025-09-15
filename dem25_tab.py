@@ -39,7 +39,7 @@ from core_logic.gis_utils import get_local_path_from_url # Necesitamos esta para
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 HOJAS_MTN25_PATH = "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/caumax-hidrologia-data/MTN25_ACTUAL_ETRS89_Peninsula_Baleares_Canarias.zip"
 # --- ¡CRÍTICO! Apunta al COG grande de 700MB ---
-DEM_NACIONAL_PATH = "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/caumax-hidrologia-data/MDT25_peninsula_UTM30N_COG.tif"
+DEM_NACIONAL_PATH = "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/caumax-hidrologia-data/MDT25_peninsula_UTM30N.tif"
 BUFFER_METROS = 5000
 LIMITE_AREA_KM2 = 15000
 # --- ¡¡¡ESTA CONSTANTE FALTABA Y ES LA CAUSA DEL ERROR!!! ---
