@@ -254,10 +254,11 @@ def create_river_profile_plot(rivers_shp_path, dem_tif_path, outlet_coords_utm):
         rivers_ds, dem_ds = None, None
         return fig, main_channel_geom, profile_data
     except Exception as e:
-        st.error(f"Se produjo un error inesperado al generar el perfil del río: {e}")
-        import traceback
-        traceback.print_exc()
-        return None, None, None
+        # st.error(f"Se produjo un error inesperado al generar el perfil del río: {e}")
+        return {"error": "Se produjo un error inesperado al generar el perfil del río: {e}"}
+        # import traceback
+        # traceback.print_exc()
+        # return None, None, None
 
 def create_profile_csv(profile_data):
     if not profile_data or 'distances_m' not in profile_data or 'elevations_m' not in profile_data: return None

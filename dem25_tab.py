@@ -58,15 +58,6 @@ def fig_to_base64(fig):
     plt.close(fig)
     return base64.b64encode(buf.getvalue()).decode('utf-8')
 
-# def realizar_analisis_hidrologico_directo(dem_url, outlet_coords_wgs84, umbral_rio_export):
-#     """
-#     Ejecuta el flujo de trabajo hidrológico completo directamente en la aplicación.
-#     Ahora lee el DEM directamente desde la URL.
-#     """
-#     results = {
-#         "success": False, "message": "", "plots": {}, "downloads": {},
-#         "lfp_metrics": {}, "hypsometric_data": {}, "lfp_profile_data": {}
-#     }
     
 def realizar_analisis_hidrologico_directo(dem_url, outlet_coords_wgs84, umbral_rio_export):
     """
@@ -544,9 +535,9 @@ def export_gdf_to_zip(gdf, filename_base):
 def precalcular_acumulacion(_dem_bytes):
     try:
         # Pyflwdir necesita un archivo local o bytes en memoria.
-        # Si _dem_bytes es una URL, lo descargamos a un MemoryFile.
         if isinstance(_dem_bytes, str) and _dem_bytes.startswith('http'):
-            with requests.get(_dem_bytes, stream=True) as r:
+            # Asegúrate de que 'requests' esté importado
+            with requests.get(_dem_bytes, stream=True, timeout=30) as r:
                 r.raise_for_status()
                 dem_bytes_content = r.content
             memfile = rasterio.io.MemoryFile(dem_bytes_content)
@@ -559,49 +550,28 @@ def precalcular_acumulacion(_dem_bytes):
             if nodata is not None: dem_array[dem_array == nodata] = np.nan
             transform = src.transform
         
+        # flwdir usa D8 por defecto para upstream_area
         flwdir = pyflwdir.from_dem(data=dem_array, transform=transform, nodata=np.nan)
         acc = flwdir.upstream_area(unit='cell')
+        
+        # --- Lógica de transformación logarítmica para visualización ---
         acc_limpio = np.nan_to_num(acc, nan=0.0)
-        acc_limpio = np.where(acc_limpio < 0, 0, acc_limpio) # Eliminar negativos por si acaso
+        acc_limpio = np.where(acc_limpio < 0, 0, acc_limpio) 
 
-        # # Nuevo: Usar una transformación de potencia (corrección gamma) para aumentar el contraste
-        # # y hacer los píxeles de los cauces más evidentes para la selección.
-        # # Un exponente pequeño (ej. 0.2) realza los valores altos de acumulación,
-        # # haciendo que los píxeles individuales de la red fluvial sean más nítidos.
-        # power_factor = 0.2 # Valor recomendado para realce de contraste. Ajustar si es necesario (0.1 para más, 0.3 para menos).
-        # scaled_acc_for_viz = acc_limpio ** power_factor # <-- Nueva línea para la transformación de potencia
-        # 
-        # min_val, max_val = np.nanmin(scaled_acc_for_viz), np.nanmax(scaled_acc_for_viz) # <-- Usar la nueva variable aquí
-        # 
-        # if max_val == min_val:
-        #     # Evitar división por cero si el ráster es plano
-        #     img_acc = np.zeros_like(scaled_acc_for_viz, dtype=np.uint8) # <-- Usar la nueva variable aquí
-        # else:
-        #     # Normalizar los valores a un rango de 0-255 para crear una imagen en escala de grises
-        #     scaled_acc_nan_as_zero = np.nan_to_num(scaled_acc_for_viz, nan=min_val) # <-- Usar la nueva variable aquí
-        #     img_acc = (255 * (scaled_acc_nan_as_zero - min_val) / (max_val - min_val)).astype(np.uint8)
-        # --- INICIO DEL CAMBIO SOLICITADO: Usar transformación logarítmica ---
-        # Aseguramos que acc_limpio exista y sea numérico antes de aplicar log1p
-
-        log_acc = np.log1p(acc_limpio) # Aplica log(1 + x) para manejar el cero y realzar pequeños valores
+        log_acc = np.log1p(acc_limpio) # Aplica log(1 + x)
         
         min_val, max_val = np.nanmin(log_acc), np.nanmax(log_acc)
         
         if max_val == min_val:
-            # Evitar división por cero si el ráster es plano (todos los valores son iguales)
             img_acc = np.zeros_like(log_acc, dtype=np.uint8)
         else:
-            # Normalizar los valores a un rango de 0-255 para crear una imagen en escala de grises
-            # np.nan_to_num aquí es redundante si acc_limpio ya está limpio, pero lo mantenemos por seguridad.
             log_acc_nan_as_zero = np.nan_to_num(log_acc, nan=min_val) 
             img_acc = (255 * (log_acc_nan_as_zero - min_val) / (max_val - min_val)).astype(np.uint8)
-        # --- FIN DEL CAMBIO SOLICITADO ---
-
+        
         return img_acc
     except Exception as e:
-        # st.error(f"Error en el pre-cálculo con pyflwdir: {e}") # <--- ELIMINAR
-        # st.code(traceback.format_exc()) # <--- ELIMINAR
-        return {"error": f"Error en el pre-cálculo con pyflwdir: {e}\n{traceback.format_exc()}"} # <--- CAMBIO
+        # Devolver un diccionario de error para que la función llamadora lo gestione
+        return {"error": f"Error en el pre-cálculo con pyflwdir: {e}\n{traceback.format_exc()}"}
 
 # ==============================================================================
 # SECCIÓN 5: FUNCIÓN PRINCIPAL DEL FRONTEND (RENDERIZADO DE LA PESTAÑA)
@@ -619,62 +589,64 @@ def render_dem25_tab():
 
     st.info("Esta herramienta identifica las hojas del MTN25 y genera un DEM recortado para la cuenca (con buffer de 5km) o para un área dibujada manualmente.")
 
-    # **Mantenemos este chequeo inicial SOLO para el caso de que NO haya cuenca calculada en Pestaña 1**
-    # Esto evitará la mayoría de los "doble click" si el usuario ya ha calculado en Pestaña 1
+    # **Condición inicial: el usuario debe haber calculado una cuenca en Pestaña 1**
     if not st.session_state.get('basin_geojson'):
         st.warning("⬅️ Por favor, primero calcule una cuenca en la Pestaña 1 para habilitar esta funcionalidad.")
-        return # Salir si no hay cuenca para procesar.
+        return # Salir temprano si no hay cuenca para procesar.
 
-    # El botón siempre estará visible si hay una cuenca de la Pestaña 1.
-    if st.button("🗺️ Analizar Hojas y DEM para la Cuenca Actual", use_container_width=True):
+    # El botón siempre se muestra si hay una cuenca de Pestaña 1.
+    button_clicked = st.button("🗺️ Analizar Hojas y DEM para la Cuenca Actual", use_container_width=True)
+
+    # --- Lógica de procesamiento del botón ---
+    if button_clicked:
         try:
             temp_cuenca_gdf = gpd.read_file(st.session_state.basin_geojson).set_crs("EPSG:4326")
             area_km2 = temp_cuenca_gdf.to_crs("EPSG:25830").area.sum() / 1_000_000
             if area_km2 > AREA_PROCESSING_LIMIT_KM2:
                 st.error(f"El área de la cuenca calculada ({area_km2:,.0f} km²) es demasiado grande. Límite: {AREA_PROCESSING_LIMIT_KM2:,.0f} km².")
-                st.session_state.show_dem25_content = False # Importante: resetear si hay error
-                # No necesitamos st.stop() aquí, dejaremos que el script continúe y muestre el error.
-                # El return del final de render_dem25_tab se encargará si show_dem25_content es False.
-                return 
+                st.session_state.show_dem25_content = False
+                return # Salir del bloque del botón, el error ya se muestra.
         except Exception as e:
             st.error(f"No se pudo verificar el área de la cuenca: {e}")
             st.session_state.show_dem25_content = False
-            return
+            return # Salir del bloque del botón, el error ya se muestra.
 
         with st.spinner("Procesando recorte del DEM... Esta operación puede tardar varios segundos. Por favor, espere."):
-            results = procesar_datos_cuenca(st.session_state.basin_geojson)
-
-        if results and results.get("error"):
-            st.error(results["error"])
-            st.session_state.show_dem25_content = False # Si hay un error, no mostramos el contenido
-            # No se necesita st.stop() o st.rerun() aquí, el error se mostrará y el script continuará
-            # hasta el final del render_dem25_tab donde la condición de show_dem25_content=False actuará.
-        elif results: # Éxito en procesar_datos_cuenca
-            st.session_state.cuenca_results = results
+            results_procesar_cuenca = procesar_datos_cuenca(st.session_state.basin_geojson)
+        
+        if results_procesar_cuenca and results_procesar_cuenca.get("error"):
+            st.error(results_procesar_cuenca["error"])
+            st.session_state.show_dem25_content = False
+        else: # Éxito en procesar_datos_cuenca
+            st.session_state.cuenca_results = results_procesar_cuenca
             st.session_state.processed_basin_id = st.session_state.basin_geojson
             
-            precalc_acc_result = precalcular_acumulacion(results['dem_bytes'])
+            # --- Precalcular acumulación (ahora con la lógica logarítmica) ---
+            # Asegúrate de que DEM_NACIONAL_PATH y HOJAS_MTN25_PATH estén bien definidos
+            # con la subcarpeta 'caumax-hidrologia-data/' si es el caso.
+            precalc_acc_result = precalcular_acumulacion(results_procesar_cuenca['dem_bytes'])
             if isinstance(precalc_acc_result, dict) and "error" in precalc_acc_result:
                 st.error(f"Error en el pre-cálculo de acumulación para la visualización: {precalc_acc_result['error']}")
                 st.session_state.precalculated_acc = None
+                st.session_state.show_dem25_content = False # Si falla la pre-acumulación, no mostrar el contenido
             else:
                 st.session_state.precalculated_acc = precalc_acc_result
+                st.session_state.show_dem25_content = True # Marcar como listo para mostrar el contenido
             
             st.session_state.pop('poligono_results', None)
             st.session_state.pop('user_drawn_geojson', None)
             st.session_state.pop('polygon_error_message', None)
             st.session_state.pop('hidro_results_externo', None)
-            st.session_state.show_dem25_content = True # Marcar como listo para mostrar el contenido
-            # ELIMINAR st.rerun() AQUÍ. Permitimos que el script continúe para dibujar de inmediato.
-        else: # Un caso genérico de fallo que no devolvió un diccionario de error específico
-            st.error("No se pudo procesar la cuenca. La operación falló o superó el tiempo de espera. Revisa los logs del servidor para más detalles.")
-            st.session_state.show_dem25_content = False
+            
+        # Forzar un rerun aquí para que el script se reinicie y las secciones condicionales
+        # (como la que comprueba st.session_state.show_dem25_content) se evalúen con el estado actualizado.
+        st.rerun() 
 
-    # AHORA, esta condición de guardia se aplica al resto del contenido de la pestaña.
-    # Se ejecutará DESPUÉS de que el botón haya tenido la oportunidad de actualizar el estado.
+    # --- Condición de guardia para el resto del contenido de la pestaña ---
+    # Solo se renderiza si show_dem25_content es True
     if not st.session_state.get('show_dem25_content') or not st.session_state.get('cuenca_results'):
-        if st.session_state.get('basin_geojson'): # Si hay cuenca pero aún no se ha procesado con el botón
-             st.info("Haga clic en 'Analizar Hojas y DEM para la Cuenca Actual' para empezar.")
+        if st.session_state.get('basin_geojson') and not button_clicked: # Mensaje si hay cuenca pero no se ha procesado (ni se acaba de hacer click)
+             st.info("Haga clic en 'Analizar Hojas y DEM para la Cuenca Actual' para empezar o para ver los resultados procesados.")
         return # No renderizar el resto de la pestaña si no está lista
 
     
@@ -802,27 +774,37 @@ def render_dem25_tab():
     umbral_celdas = st.slider(label=slider_label, min_value=min_celdas, max_value=max_celdas, value=default_celdas, step=step_celdas)
     area_seleccionada_km2 = umbral_celdas * CELL_AREA_KM2
     st.info(f"**Valor seleccionado:** {umbral_celdas} celdas  ➡️  **Área de drenaje mínima:** {area_seleccionada_km2:.4f} km²")
-
+    
     if st.button("Calcular Cuenca y Red Fluvial", use_container_width=True, disabled='outlet_coords' not in st.session_state):
         if 'hidro_results_externo' in st.session_state:
             del st.session_state['hidro_results_externo']
-
-        # --- ¡AQUÍ ESTÁ EL CAMBIO CLAVE! ---
-        # Se llama a la función directa en lugar del subproceso.
+    
+        delineation_error = None # Variable para capturar errores de la delineación
+    
         with st.spinner("Ejecutando análisis hidrológico completo... Esto puede tardar unos segundos."):
-            results = realizar_analisis_hidrologico_directo(
-                st.session_state.cuenca_results['dem_bytes'], # dem_bytes es ahora el DEM recortado en memoria
-                st.session_state.outlet_coords,
-                umbral_celdas
-            )
-        
-        if results and results.get("success"):
-            st.session_state.hidro_results_externo = results
-            st.success(results.get("message", "Cálculo completado."))
-        elif results:
+            try:
+                results_hidro = realizar_analisis_hidrologico_directo(
+                    st.session_state.cuenca_results['dem_bytes'],
+                    st.session_state.outlet_coords,
+                    umbral_celdas
+                )
+            except Exception as e:
+                delineation_error = f"Error inesperado al llamar a realizar_analisis_hidrologico_directo: {e}\n{traceback.format_exc()}"
+                results_hidro = None # Asegurar que results_hidro sea None si la llamada falla catastróficamente.
+    
+        if delineation_error:
+            st.error(f"¡Error en el proceso de delineación hidrológica!")
+            st.code(delineation_error, language='bash')
+        elif results_hidro and results_hidro.get("success"):
+            st.session_state.hidro_results_externo = results_hidro
+            st.success(results_hidro.get("message", "Cálculo completado."))
+        elif results_hidro: # Falló pero devolvió un diccionario de resultados con un mensaje
             st.error(f"El análisis reportó un error:")
-            st.code(results.get("message", "Error desconocido."), language='bash')
-        st.rerun()
+            st.code(results_hidro.get("message", "Error desconocido."), language='bash')
+        else: # results_hidro fue None y no hubo un error capturado en el try-except de la llamada
+            st.error("El análisis hidrológico falló y no se obtuvieron resultados. Revise los logs del servidor para más detalles.")
+    
+        st.rerun() # Forzar rerun para mostrar los resultados o errores.
 
     # --- La lógica para mostrar los resultados permanece igual, ya que la estructura del
     #     diccionario 'results' es idéntica a la que devolvía el script original.
