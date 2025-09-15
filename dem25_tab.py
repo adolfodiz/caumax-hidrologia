@@ -39,7 +39,7 @@ from core_logic.gis_utils import get_local_path_from_url # Necesitamos esta para
 # ==============================================================================
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-HOJAS_MTN25_PATH = "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/MTN25_ACTUAL_ETRS89_Peninsula_Baleares_Canarias.zip"
+HOJAS_MTN25_PATH = "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/caumax-hidrologia-data/MTN25_ACTUAL_ETRS89_Peninsula_Baleares_Canarias.zip"
 # --- ¡CRÍTICO! Apunta al COG grande de 700MB ---
 DEM_NACIONAL_PATH = "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/MDT25_peninsula_UTM30N.tif"
 BUFFER_METROS = 5000
@@ -48,6 +48,11 @@ LIMITE_AREA_KM2 = 15000
 AREA_PROCESSING_LIMIT_KM2 = 50000 # Límite para evitar procesar cuencas gigantes en Pestaña 2
 # --- ¡¡¡AHORA SÍ ESTÁ!!! ---
 
+# Define un valor para el buffer de búsqueda del snap si queremos que sea mayor.
+# El valor actual de 5000 para bbox_utm ya es un área de 10x10km.
+# Un radio de búsqueda local para el punto puede ser de 2-3 píxeles alrededor del clic.
+SNAP_SEARCH_RADIUS_PIXELS = 2 # Buscar en un vecindario de 2 píxeles alrededor del clic.
+                               # Esto es un buen equilibrio para no hacer la búsqueda excesivamente larga.
 # ==============================================================================
 # SECCIÓN 3: LÓGICA DE ANÁLISIS HIDROLÓGICO
 # ==============================================================================
@@ -59,340 +64,713 @@ def fig_to_base64(fig):
     return base64.b64encode(buf.getvalue()).decode('utf-8')
 
     
+# def realizar_analisis_hidrologico_directo(dem_url, outlet_coords_wgs84, umbral_rio_export):
+#     """
+#     Ejecuta el flujo de trabajo hidrológico completo directamente en la aplicación.
+#     Ahora lee el DEM directamente desde la URL.
+#     """
+#     results = { # Asegúrate de que esta sea la ÚNICA inicialización de 'results'
+#         "success": False, "message": "", "plots": {}, "downloads": {},
+#         "lfp_metrics": {}, "hypsometric_data": {}, "lfp_profile_data": {}
+#     }
+#     try:
+#         if dem_url is None: # Comprobación de seguridad
+#             results['message'] = "Error: El DEM de entrada para el análisis hidrológico es None."
+#             print("ERROR: realizar_analisis_hidrologico_directo - dem_url es None.")
+#             return results
+# 
+#         with rasterio.io.MemoryFile(dem_url) as memfile:
+#             with memfile.open() as src_global:
+#                 print(f"DEBUG: realizar_analisis_hidrologico_directo - DEM global abierto desde MemoryFile. CRS: {src_global.crs}, Bounds: {src_global.bounds}") # <-- Añadir bounds
+#                 
+#                 transformer_wgs84_to_dem_crs = Transformer.from_crs("EPSG:4326", src_global.crs, always_xy=True)
+#                 x_dem_crs, y_dem_crs = transformer_wgs84_to_dem_crs.transform(outlet_coords_wgs84['lng'], outlet_coords_wgs84['lat'])
+#                 print(f"DEBUG: realizar_analisis_hidrologico_directo - Outlet UTM: ({x_dem_crs}, {y_dem_crs})") # <-- Nuevo print
+# 
+#                 buffer_size_for_pysheds = 5000
+#                 bbox_utm = (x_dem_crs - buffer_size_for_pysheds, y_dem_crs - buffer_size_for_pysheds,
+#                             x_dem_crs + buffer_size_for_pysheds, y_dem_crs + buffer_size_for_pysheds)
+#                 print(f"DEBUG: realizar_analisis_hidrologico_directo - BBox para recorte PySheds: {bbox_utm}") # <-- Nuevo print
+# 
+#                 # --- Verificar si el bbox está dentro de src_global.bounds ---
+#                 # src_global.bounds es un BoundingBox, no un objeto Shapely.
+#                 # Convertimos ambos a objetos Polygon para usar 'intersects'.
+#                 # src_global_polygon = Polygon.from_bounds(*src_global.bounds) # <-- Comentado
+#                 # bbox_utm_polygon = Polygon.from_bounds(*bbox_utm) # <-- Comentado
+# 
+#                 # if not src_global_polygon.intersects(bbox_utm_polygon): # <-- Comentado
+#                 #     results['message'] = "Error: El punto de desagüe y su buffer están fuera del DEM recortado de la cuenca. Intente un punto más central."
+#                 #     print(f"ERROR: realizar_analisis_hidrologico_directo - BBox de PySheds fuera de los límites del DEM global. src_global.bounds: {src_global.bounds}")
+#                 #     return results
+# 
+#                 out_image, out_transform = mask(src_global, [Polygon.from_bounds(*bbox_utm)], crop=True, nodata=src_global.nodata)
+#                 print(f"DEBUG: realizar_analisis_hidrologico_directo - out_image.shape después de mask: {out_image.shape}") # <-- Nuevo print
+#                 print(f"DEBUG: realizar_analisis_hidrologico_directo - out_transform después de mask: {out_transform}") # <-- Nuevo print
+#                 
+#                 if out_image.size == 0 or out_image.shape[1] == 0 or out_image.shape[2] == 0: # <-- Nueva comprobación
+#                     results['message'] = "Error: El recorte del DEM para PySheds resultó en una imagen vacía o inválida."
+#                     print(f"ERROR: realizar_analisis_hidrologico_directo - out_image está vacío o inválido: {out_image.shape}") # <-- Nuevo print
+#                     return results
+# 
+#                 out_meta = src_global.meta.copy()
+#                 out_meta.update({"driver": "GTiff", "height": out_image.shape[1], "width": out_image.shape[2], "transform": out_transform, "compress": "NONE"})
+# 
+#                 with tempfile.NamedTemporaryFile(delete=False, suffix='.tif') as tmp_dem_pysheds:
+#                     with rasterio.open(tmp_dem_pysheds.name, 'w', **out_meta) as dst:
+#                         dst.write(out_image)
+#                     dem_path_for_pysheds = tmp_dem_pysheds.name
+#                 print(f"DEBUG: realizar_analisis_hidrologico_directo - DEM temporal para PySheds guardado en: {dem_path_for_pysheds}") # <-- Nuevo print
+# 
+#         # --- PASO 2: PROCESAMIENTO HIDROLÓGICO CON PYSHEDS (CÓDIGO ORIGINAL) ---
+#         no_data_value = out_meta.get('nodata', -32768)
+#         print(f"DEBUG: realizar_analisis_hidrologico_directo - Iniciando Grid.from_raster con {dem_path_for_pysheds}") # <-- Nuevo print
+#         grid = Grid.from_raster(dem_path_for_pysheds, nodata=no_data_value)
+#         print(f"DEBUG: realizar_analisis_hidrologico_directo - Grid creado. Extent: {grid.extent}") # <-- Nuevo print
+#         dem = grid.read_raster(dem_path_for_pysheds, nodata=no_data_value)
+#         print(f"DEBUG: realizar_analisis_hidrologico_directo - DEM leído por Grid. Shape: {dem.shape}") # <-- Nuevo print
+# 
+#         # Ajustamos las coordenadas del punto de salida al nuevo DEM recortado
+#         x_snap, y_snap = grid.snap_to_mask(grid.accumulation(grid.flowdir(grid.fill_depressions(grid.fill_pits(dem)))) > umbral_rio_export, (x_dem_crs, y_dem_crs))
+#         
+#         # Si el punto de snap está fuera del DEM recortado, ajustamos.
+#         if not (grid.extent[0] <= x_snap <= grid.extent[1] and grid.extent[2] <= y_snap <= grid.extent[3]):
+#             results['message'] = "El punto de desagüe se encuentra demasiado cerca del borde del DEM recortado para el análisis. Intente un punto más central."
+#             return results
+# 
+#         pit_filled_dem = grid.fill_pits(dem)
+#         flooded_dem = grid.fill_depressions(pit_filled_dem)
+#         conditioned_dem = grid.resolve_flats(flooded_dem)
+#         flowdir = grid.flowdir(conditioned_dem)
+#         acc = grid.accumulation(flowdir)
+#         
+#         # Re-snap al DEM recortado
+#         x_snap, y_snap = grid.snap_to_mask(acc > umbral_rio_export, (x_dem_crs, y_dem_crs))
+#         catch = grid.catchment(x=x_snap, y=y_snap, fdir=flowdir, xytype="coordinate")
+# 
+#         # --- AÑADIDO: Verificar si la cuenca delineada está vacía ---
+#         # Si 'catch' no contiene ningún píxel True, la cuenca está vacía.
+#         if not np.any(catch): 
+#             results['message'] = "Advertencia: No se pudo delinear una cuenca para el punto y umbral seleccionados. Intente un punto diferente o ajuste el umbral de acumulación. Asegúrese de que el punto esté sobre un cauce con suficiente área de drenaje."
+#             results['success'] = False
+#             return results
+#         # --- FIN AÑADIDO ---
+#         
+#         # --- PASO 3: INICIALIZACIÓN DE PYFLWDIR (CÓDIGO ORIGINAL) ---
+#         # PyFlwdir también puede abrir el DEM recortado
+#         flw = pyflwdir.from_dem(data=out_image[0], nodata=no_data_value, transform=out_transform, latlon=False)
+#         upa = flw.upstream_area(unit='cell')
+# 
+#         # --- PASO 4: GENERACIÓN DE GRÁFICOS Y MÉTRICAS (CÓDIGO ORIGINAL) ---
+#         # Asegúrate de que las llamadas a imshow y plot usen 'grid_para_plot.extent' o 'grid.extent'
+#         # y que los datos de elevación sean 'conditioned_dem' o 'dem_data' según corresponda.
+# 
+#         # GRÁFICO 1: MOSAICO DE CARACTERÍSTICAS
+#         grid_para_plot = Grid.from_raster(dem_path_for_pysheds, nodata=no_data_value)
+#         grid_para_plot.clip_to(catch)
+#         plot_extent = grid_para_plot.extent
+#         fig1, axes = plt.subplots(2, 2, figsize=(12, 10))
+#         axes[0, 0].imshow(grid_para_plot.view(catch, nodata=np.nan), extent=plot_extent, cmap='Reds_r')
+#         axes[0, 0].set_title("Extensión de la Cuenca")
+#         num_celdas_cuenca = np.sum(catch)
+#         area_pixel_m2 = abs(grid.affine.a * grid.affine.e)
+#         area_cuenca_km2 = (num_celdas_cuenca * area_pixel_m2) / 1_000_000
+#         area_texto = f'{area_cuenca_km2:.1f} km²'
+#         centro_x = (plot_extent[0] + plot_extent[1]) / 2
+#         centro_y = (plot_extent[2] + plot_extent[3]) / 2
+#         axes[0, 0].text(centro_x, centro_y, area_texto, ha='center', va='center', color='white', fontsize=12, fontweight='bold')
+#         im_dem = axes[0, 1].imshow(grid_para_plot.view(conditioned_dem, nodata=np.nan), extent=plot_extent, cmap='terrain')
+#         axes[0, 1].set_title("Elevación")
+#         fig1.colorbar(im_dem, ax=axes[0, 1], label='Elevación (m)', shrink=0.7)
+#         im_fdir = axes[1, 0].imshow(grid_para_plot.view(flowdir, nodata=np.nan), extent=plot_extent, cmap='twilight')
+#         axes[1, 0].set_title("Dirección de Flujo")
+#         im_acc = axes[1, 1].imshow(grid_para_plot.view(acc, nodata=np.nan), extent=plot_extent, cmap='cubehelix', norm=colors.LogNorm(vmin=1, vmax=acc.max()))
+#         axes[1, 1].set_title("Acumulación de Flujo")
+#         fig1.colorbar(im_acc, ax=axes[1, 1], label='Nº celdas', shrink=0.7)
+#         for ax in axes.flat: ax.tick_params(axis='both', labelsize=6)
+#         plt.suptitle("Características de la Cuenca Delineada", fontsize=16)
+#         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+#         results['plots']['grafico_1_mosaico'] = fig_to_base64(fig1)
+# 
+#         # CÁLCULOS DEL LONGEST FLOW PATH (LFP)
+#         dist = grid._d8_flow_distance(x=x_snap, y=y_snap, fdir=flowdir, xytype='coordinate')
+#         dist_catch = np.where(catch, dist, -1)
+#         start_row, start_col = np.unravel_index(np.argmax(dist_catch), dist_catch.shape)
+#         dirmap = {1:(0,1), 2:(1,1), 4:(1,0), 8:(1,-1), 16:(0,-1), 32:(-1,-1), 64:(-1,0), 128:(-1,1)}
+#         lfp_coords = []
+#         current_row, current_col = start_row, start_col
+#         with rasterio.open(dem_path_for_pysheds) as src_pysheds: raster_transform = src_pysheds.transform
+#         while catch[current_row, current_col]:
+#             x_coord, y_coord = raster_transform * (current_col, current_row); x_coord += raster_transform.a / 2.0; y_coord += raster_transform.e / 2.0
+#             lfp_coords.append((x_coord, y_coord))
+#             direction = flowdir[current_row, current_col]
+#             if direction == 0: break
+#             row_move, col_move = dirmap[direction]; current_row += row_move; current_col += col_move
+# 
+#         # GRÁFICO 3/7 UNIFICADO: LFP y Red Fluvial de Strahler
+#         stream_mask_strahler = upa > umbral_rio_export
+#         strahler_orders = flw.stream_order(mask=stream_mask_strahler, type='strahler')
+#         stream_features = flw.streams(mask=stream_mask_strahler, strord=strahler_orders)
+#         gdf_streams_full = gpd.GeoDataFrame.from_features(stream_features, crs=src_global.crs) # Usamos el CRS original del DEM
+#         shapes_cuenca_clip = features.shapes(catch.astype(np.uint8), mask=catch, transform=out_transform) # Usamos out_transform
+# 
+#         cuenca_geoms_list = [Polygon(s['coordinates'][0]) for s, v in shapes_cuenca_clip if v == 1]
+#         
+#         # --- AÑADIDO: Verificar si se extrajo alguna geometría de la cuenca ---
+#         if not cuenca_geoms_list:
+#             results['message'] = "Error interno: No se pudo extraer la geometría vectorial de la cuenca. Esto puede indicar un problema con la delineación o un tamaño de cuenca extremadamente pequeño."
+#             results['success'] = False
+#             return results
+#         # --- FIN AÑADIDO ---
+# 
+#         cuenca_geom_clip = [Polygon(s['coordinates'][0]) for s, v in shapes_cuenca_clip if v == 1][0]
+#         gdf_cuenca_clip = gpd.GeoDataFrame(geometry=[cuenca_geom_clip], crs=src_global.crs)
+# 
+#         # --- AÑADIDO: Recorte de ríos si la cuenca no es válida (solo por seguridad) ---
+#         # Aseguramos que gdf_streams_full tenga un CRS antes de clip
+#         if gdf_streams_full.crs is None:
+#             gdf_streams_full.crs = src_global.crs # Asignar el CRS si no lo tiene
+#         
+#         # Asegurar que gdf_cuenca_clip tenga un CRS válido para el clip
+#         if gdf_cuenca_clip.crs is None:
+#             gdf_cuenca_clip.crs = src_global.crs # Asignar el CRS si no lo tiene
+#         
+#         try:
+#             gdf_streams_recortado = gpd.clip(gdf_streams_full, gdf_cuenca_clip)
+#         except Exception as clip_e:
+#             results['message'] = f"Advertencia: Falló el recorte de los ríos a la cuenca: {clip_e}. Los resultados de ríos podrían estar incompletos."
+#             gdf_streams_recortado = gpd.GeoDataFrame(geometry=[], crs=src_global.crs) # Crear un GeoDataFrame vacío
+#         # --- FIN AÑADIDO ---
+#         
+#         gdf_streams_recortado = gpd.clip(gdf_streams_full, gdf_cuenca_clip)
+#         dem_cuenca_recortada = grid_para_plot.view(conditioned_dem, nodata=np.nan)
+#         fig37, axes = plt.subplots(1, 2, figsize=(18, 9))
+#         ax1 = axes[0]
+#         im1 = ax1.imshow(dem_cuenca_recortada, extent=grid_para_plot.extent, cmap='terrain', zorder=1)
+#         fig37.colorbar(im1, ax=ax1, label='Elevación (m)', shrink=0.6)
+#         x_coords, y_coords = zip(*lfp_coords)
+#         ax1.plot(x_coords, y_coords, color='red', linewidth=2, label='Longest Flow Path', zorder=2)
+#         ax1.set_title('Camino de Flujo Más Largo (LFP)'); ax1.legend(); ax1.grid(True, linestyle='--', alpha=0.6)
+#         ax2 = axes[1]
+#         ax2.imshow(dem_cuenca_recortada, extent=grid_para_plot.extent, cmap='Greys_r', alpha=0.8, zorder=1)
+#         gdf_streams_recortado_clean = gdf_streams_recortado[gdf_streams_recortado.geom_type.isin(["LineString", "MultiLineString"])]
+#         if not gdf_streams_recortado_clean.empty:
+#             gdf_streams_recortado_clean.plot(ax=ax2, column='strord', cmap='Blues', zorder=2, legend=True, categorical=True, legend_kwds={'title': "Orden de Strahler", 'loc': 'upper right'})
+#         else:
+#             ax2.text(0.5, 0.5, 'No se encontraron ríos\ncon el umbral actual', horizontalalignment='center', verticalalignment='center', transform=ax2.transAxes, bbox=dict(facecolor='white', alpha=0.8))
+#         ax2.set_title('Red Fluvial por Orden de Strahler')
+#         plt.suptitle("Análisis Morfométrico de la Cuenca", fontsize=16)
+#         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+#         results['plots']['grafico_3_7_lfp_strahler'] = fig_to_base64(fig37)
+# 
+#         # GRÁFICO 4: PERFIL LONGITUDINAL Y MÉTRICAS LFP
+#         with rasterio.open(dem_path_for_pysheds) as src_pysheds: inv_transform = ~src_pysheds.transform
+#         profile_elevations, valid_lfp_coords = [], []
+#         for x_c, y_c in lfp_coords:
+#             try:
+#                 col, row = inv_transform * (x_c, y_c)
+#                 elevation = conditioned_dem[int(row), int(col)]
+#                 profile_elevations.append(elevation); valid_lfp_coords.append((x_c, y_c))
+#             except IndexError: continue
+#         profile_distances = [0]
+#         for i in range(1, len(valid_lfp_coords)):
+#             x1, y1 = valid_lfp_coords[i-1]; x2, y2 = valid_lfp_coords[i]
+#             profile_distances.append(profile_distances[-1] + np.sqrt((x2 - x1)**2 + (y2 - y1)**2))
+#         results['lfp_profile_data'] = {"distancia_m": profile_distances, "elevacion_m": profile_elevations}
+#         longitud_total_m = profile_distances[-1]
+#         cota_ini, cota_fin = profile_elevations[0], profile_elevations[-1]
+#         desnivel = abs(cota_fin - cota_ini)
+#         pendiente_media = desnivel / longitud_total_m if longitud_total_m > 0 else 0
+#         tc_h = (0.87 * (longitud_total_m**2 / (1000 * desnivel))**0.385) if desnivel > 0 else 0
+#         results['lfp_metrics'] = {"cota_ini_m": cota_ini, "cota_fin_m": cota_fin, "longitud_m": longitud_total_m, "pendiente_media": pendiente_media, "tc_h": tc_h, "tc_min": tc_h * 60}
+#         fig4, ax = plt.subplots(figsize=(12, 6))
+#         ax.plot(np.array(profile_distances) / 1000, profile_elevations, color='darkblue')
+#         ax.fill_between(np.array(profile_distances) / 1000, profile_elevations, alpha=0.2, color='lightblue')
+#         ax.set_title('Perfil Longitudinal del LFP'); ax.set_xlabel('Distancia (km)'); ax.set_ylabel('Elevación (m)'); ax.grid(True)
+#         results['plots']['grafico_4_perfil_lfp'] = fig_to_base64(fig4)
+# 
+#         # GRÁFICOS 5 y 6: HISTOGRAMA Y CURVA HIPSOMÉTRICA
+#         elevaciones_cuenca = conditioned_dem[catch]
+#         fig56, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
+#         ax1.hist(elevaciones_cuenca, bins=50, color='skyblue', edgecolor='black')
+#         ax1.set_title('Distribución de Elevaciones'); ax1.set_xlabel('Elevación (m)'); ax1.set_ylabel('Frecuencia')
+#         elev_sorted = np.sort(elevaciones_cuenca)[::-1]
+#         cell_area = abs(out_transform.a * out_transform.e) # Usamos out_transform
+#         area_acumulada = np.arange(1, len(elev_sorted) + 1) * cell_area
+#         area_normalizada = area_acumulada / area_acumulada.max()
+#         elev_normalizada = (elev_sorted - elev_sorted.min()) / (elev_sorted.max() - elev_sorted.min())
+#         integral_hipsometrica = abs(np.trapz(area_normalizada, x=elev_normalizada))
+#         results['hypsometric_data'] = {"area_normalizada": area_normalizada.tolist(), "elevacion": elev_sorted.tolist()}
+#         elev_min, elev_max = elev_sorted.min(), elev_sorted.max()
+#         ax2.plot(area_normalizada, elev_sorted, color='red', linewidth=2, label='Curva Hipsométrica')
+#         ax2.fill_between(area_normalizada, elev_sorted, elev_min, color='red', alpha=0.2)
+#         ax2.plot([0, 1], [elev_max, elev_min], color='gray', linestyle='--', linewidth=2, label='Referencia lineal (HI=0.5)')
+#         ax2.text(0.05, 0.1, f'Integral Hipsométrica: {integral_hipsometrica:.3f}', transform=ax2.transAxes, fontsize=12, bbox=dict(facecolor='white', alpha=0.8))
+#         ax2.set_title('Curva Hipsométrica'); ax2.set_xlabel('Fracción de área (a/A)'); ax2.set_ylabel('Elevación (m)'); ax2.legend(); ax2.set_xlim(0, 1)
+#         results['plots']['grafico_5_6_histo_hipso'] = fig_to_base64(fig56)
+# 
+#         # GRÁFICO 11: HAND Y LLANURAS DE INUNDACIÓN
+#         # Para pyflwdir, necesitamos el DEM recortado
+#         flw_recortado = pyflwdir.from_dem(data=out_image[0], nodata=no_data_value, transform=out_transform, latlon=False)
+#         upa_km2 = flw_recortado.upstream_area(unit='km2')
+#         upa_min_threshold = 1.0
+#         hand = flw_recortado.hand(drain=upa_km2 > upa_min_threshold, elevtn=out_image[0])
+#         floodplains = flw_recortado.floodplains(elevtn=out_image[0], uparea=upa_km2, upa_min=upa_min_threshold)
+#         
+#         dem_background = np.where(catch, conditioned_dem, np.nan)
+#         hand_masked = np.where(catch & (hand > 0), hand, np.nan)
+#         floodplains_masked = np.where(catch & (floodplains > 0), 1.0, np.nan)
+#         fig11, axes = plt.subplots(1, 2, figsize=(18, 9))
+#         ax1, ax2 = axes[0], axes[1]
+#         xmin, xmax, ymin, ymax = grid_para_plot.extent
+#         ax1.imshow(dem_background, extent=grid.extent, cmap='Greys_r', zorder=1)
+#         vmax_hand = np.nanpercentile(hand_masked, 98) if not np.all(np.isnan(hand_masked)) else 1
+#         im_hand = ax1.imshow(hand_masked, extent=grid.extent, cmap='gist_earth_r', alpha=0.7, zorder=2, vmin=0, vmax=vmax_hand)
+#         fig11.colorbar(im_hand, ax=ax1, label='Altura sobre drenaje (m)', shrink=0.6)
+#         ax1.set_title(f'Altura Sobre Drenaje (HAND)\n(upa_min > {upa_min_threshold:.1f} km²)')
+#         ax1.set_xlabel('Coordenada X (UTM)'); ax1.set_ylabel('Coordenada Y (UTM)'); ax1.grid(True, linestyle='--', alpha=0.6)
+#         ax1.set_xlim(xmin, xmax); ax1.set_ylim(ymin, ymax)
+#         ax2.imshow(dem_background, extent=grid.extent, cmap='Greys', zorder=1)
+#         ax2.imshow(floodplains_masked, extent=grid.extent, cmap='Blues', alpha=0.7, zorder=2, vmin=0, vmax=1)
+#         ax2.set_title(f'Llanuras de Inundación\n(upa_min > {upa_min_threshold:.1f} km²)')
+#         ax2.set_xlabel('Coordenada X (UTM)'); ax2.set_ylabel(''); ax2.grid(True, linestyle='--', alpha=0.6)
+#         ax2.set_xlim(xmin, xmax); ax2.set_ylim(ymin, ymax)
+#         fig11.suptitle("Índices de Elevación (HAND y Llanuras de Inundación)", fontsize=16)
+#         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+#         results['plots']['grafico_11_llanuras'] = fig_to_base64(fig11)
+# 
+#         # --- PASO 5: EXPORTACIÓN A GEOMETRÍAS (CÓDIGO ORIGINAL) ---
+#         output_crs = "EPSG:25830"
+#         gdf_punto = gpd.GeoDataFrame({'id': [1], 'geometry': [Point(x_snap, y_snap)]}, crs=output_crs)
+#         results['downloads']['punto_salida'] = gdf_punto.to_json()
+#         gdf_lfp = gpd.GeoDataFrame({'id': [1], 'geometry': [LineString(lfp_coords)]}, crs=output_crs)
+#         results['downloads']['lfp'] = gdf_lfp.to_json()
+#         gdf_cuenca = gpd.GeoDataFrame({'id': [1], 'geometry': [cuenca_geom_clip]}, crs=output_crs)
+#         results['downloads']['cuenca'] = gdf_cuenca.to_json()
+#         river_raster = acc > umbral_rio_export
+#         shapes_rios = features.shapes(river_raster.astype(np.uint8), mask=river_raster, transform=out_transform) # Usamos out_transform
+#         river_geoms = [LineString(s['coordinates'][0]) for s, v in shapes_rios if v == 1]
+#         gdf_rios_full = gpd.GeoDataFrame(geometry=river_geoms, crs=output_crs)
+#         gdf_rios_recortado = gpd.clip(gdf_rios_full, gdf_cuenca)
+#         gdf_rios_final = gdf_rios_recortado[gdf_rios_recortado.geom_type == 'LineString']
+#         results['downloads']['rios'] = gdf_rios_final.to_json()
+#         gdf_streams_recortado_clean.crs = output_crs # Aseguramos CRS para exportar
+#         results['downloads']['rios_strahler'] = gdf_streams_recortado_clean.to_json()
+# 
+#         # --- PASO 6: FINALIZAR Y DEVOLVER RESULTADOS ---
+#         results['success'] = True
+#         results['message'] = "Cálculo completado con éxito directamente desde la aplicación."
+# 
+#     # except Exception as e:
+#     #     results['message'] = f"Error en el análisis hidrológico directo: {traceback.format_exc()}"
+#     #     results['success'] = False
+#     # finally:
+#     #     # Aseguramos que el archivo temporal de PySheds se elimine
+#     #     if 'dem_path_for_pysheds' in locals() and os.path.exists(dem_path_for_pysheds):
+#     #         os.remove(dem_path_for_pysheds)
+#     # 
+#     # return results
+# 
+# 
+#     except Exception as e:
+#         # Aseguramos que 'results' sea un diccionario antes de intentar asignarle un mensaje
+#         # Esto ya lo tenías, pero es importante reiterarlo.
+#         if not isinstance(results, dict):
+#             results = {"success": False}
+#         
+#         # Añadir un mensaje más informativo para el usuario
+#         error_message = f"Error en el análisis hidrológico directo: {e}"
+#         if "IndexError: list index out of range" in traceback.format_exc():
+#             error_message += "\nSugerencia: El punto de desagüe o el umbral seleccionado no permitió delinear una cuenca válida o extraer sus geometrías. Intente un punto diferente o ajuste el umbral."
+#         
+#         results['message'] = f"{error_message}\n{traceback.format_exc()}"
+#         results['success'] = False
+#         print(f"ERROR: realizar_analisis_hidrologico_directo - Error general capturado: {e}")
+#         print(traceback.format_exc())
+#     finally:
+#         # Aseguramos que el archivo temporal de PySheds se elimine
+#         # dem_path_for_pysheds solo se define si el bloque try se ejecuta hasta cierto punto.
+#         # Es más seguro verificar si existe en locals() antes de intentar eliminarlo.
+#         if 'dem_path_for_pysheds' in locals() and os.path.exists(dem_path_for_pysheds):
+#             try:
+#                 os.remove(dem_path_for_pysheds)
+#                 print(f"DEBUG: Archivo temporal eliminado: {dem_path_for_pysheds}")
+#             except Exception as cleanup_e:
+#                 print(f"ERROR: Fallo al eliminar archivo temporal {dem_path_for_pysheds}: {cleanup_e}")
+#     return results
+
+
 def realizar_analisis_hidrologico_directo(dem_url, outlet_coords_wgs84, umbral_rio_export):
-    """
-    Ejecuta el flujo de trabajo hidrológico completo directamente en la aplicación.
-    Ahora lee el DEM directamente desde la URL.
-    """
-    results = { # Asegúrate de que esta sea la ÚNICA inicialización de 'results'
+    results = {
         "success": False, "message": "", "plots": {}, "downloads": {},
         "lfp_metrics": {}, "hypsometric_data": {}, "lfp_profile_data": {}
     }
-    try:
-        if dem_url is None: # Comprobación de seguridad
-            results['message'] = "Error: El DEM de entrada para el análisis hidrológico es None."
-            print("ERROR: realizar_analisis_hidrologico_directo - dem_url es None.")
-            return results
+    dem_path_for_pysheds = None
+    
+    # Definir los umbrales de reintento
+    # Empezamos con el umbral del usuario, luego reducimos de 50 en 50.
+    # El slider tiene un mínimo de 10, así que no podemos ir por debajo.
+    # Asegúrate de que min_celdas sea accesible (o se defina aquí).
+    # Si CELL_AREA_KM2 está definido globalmente en dem25_tab.py, es accesible.
+    # min_slider_value = 10 # El valor mínimo del slider para umbral_celdas
 
-        with rasterio.io.MemoryFile(dem_url) as memfile:
-            with memfile.open() as src_global:
-                print(f"DEBUG: realizar_analisis_hidrologico_directo - DEM global abierto desde MemoryFile. CRS: {src_global.crs}, Bounds: {src_global.bounds}") # <-- Añadir bounds
-                
-                transformer_wgs84_to_dem_crs = Transformer.from_crs("EPSG:4326", src_global.crs, always_xy=True)
-                x_dem_crs, y_dem_crs = transformer_wgs84_to_dem_crs.transform(outlet_coords_wgs84['lng'], outlet_coords_wgs84['lat'])
-                print(f"DEBUG: realizar_analisis_hidrologico_directo - Outlet UTM: ({x_dem_crs}, {y_dem_crs})") # <-- Nuevo print
+    # Para ser robustos, obtenemos el min_value del slider si es posible.
+    # Como la función es independiente, podemos hardcodear un mínimo seguro o pasar un parámetro.
+    # Para simplicidad y robustez, usaremos un mínimo hardcodeado si no se pasa.
+    MIN_UMBRAL_CELAS_REINTENTO = 50 # Un valor razonable para la búsqueda automática.
+                                  # Si el slider permite 10, deberíamos ir hasta 10.
+                                  # Si el usuario selecciona 10, solo se intenta con 10.
+                                  # Así que el mínimo debe ser el del slider.
+    
+    # umbrales_a_probar incluirá el umbral del usuario y luego decrementos de 50
+    umbrales_a_probar = [umbral_rio_export]
+    current_umbral = umbral_rio_export
+    # Bucle para añadir umbrales decrecientes hasta el mínimo o un múltiplo de 50
+    while current_umbral > MIN_UMBRAL_CELAS_REINTENTO:
+        # Calcular el siguiente umbral, que es el múltiplo de 50 inmediatamente inferior
+        next_umbral = (current_umbral // 50) * 50 - 50
+        if next_umbral < MIN_UMBRAL_CELAS_REINTENTO: # Si el siguiente cae por debajo del mínimo, lo ajustamos
+            next_umbral = MIN_UMBRAL_CELAS_REINTENTO
+        if next_umbral <= 0: # Evitar umbrales no válidos
+            break
+        if next_umbral < current_umbral: # Solo añadir si realmente es menor
+            umbrales_a_probar.append(next_umbral)
+        current_umbral = next_umbral
+        if current_umbral == MIN_UMBRAL_CELAS_REINTENTO and MIN_UMBRAL_CELAS_REINTENTO not in umbrales_a_probar:
+            umbrales_a_probar.append(MIN_UMBRAL_CELAS_REINTENTO)
+    
+    # Asegurarse de que no haya duplicados y que estén ordenados de mayor a menor.
+    umbrales_a_probar = sorted(list(set(umbrales_a_probar)), reverse=True)
 
-                buffer_size_for_pysheds = 5000
-                bbox_utm = (x_dem_crs - buffer_size_for_pysheds, y_dem_crs - buffer_size_for_pysheds,
-                            x_dem_crs + buffer_size_for_pysheds, y_dem_crs + buffer_size_for_pysheds)
-                print(f"DEBUG: realizar_analisis_hidrologico_directo - BBox para recorte PySheds: {bbox_utm}") # <-- Nuevo print
 
-                # --- Verificar si el bbox está dentro de src_global.bounds ---
-                # src_global.bounds es un BoundingBox, no un objeto Shapely.
-                # Convertimos ambos a objetos Polygon para usar 'intersects'.
-                # src_global_polygon = Polygon.from_bounds(*src_global.bounds) # <-- Comentado
-                # bbox_utm_polygon = Polygon.from_bounds(*bbox_utm) # <-- Comentado
+    for intento_umbral in umbrales_a_probar:
+        print(f"DEBUG: Intentando delineación con umbral_rio_export = {intento_umbral} celdas")
+        # Reiniciar el estado para cada intento (variables temporales que pueden cambiar)
+        temp_results = results.copy() # Copia superficial para no perder los datos del finally si hay error catastrófico
+        temp_dem_path_for_pysheds = None # Para el archivo temporal dentro del bucle
 
-                # if not src_global_polygon.intersects(bbox_utm_polygon): # <-- Comentado
-                #     results['message'] = "Error: El punto de desagüe y su buffer están fuera del DEM recortado de la cuenca. Intente un punto más central."
-                #     print(f"ERROR: realizar_analisis_hidrologico_directo - BBox de PySheds fuera de los límites del DEM global. src_global.bounds: {src_global.bounds}")
-                #     return results
-
-                out_image, out_transform = mask(src_global, [Polygon.from_bounds(*bbox_utm)], crop=True, nodata=src_global.nodata)
-                print(f"DEBUG: realizar_analisis_hidrologico_directo - out_image.shape después de mask: {out_image.shape}") # <-- Nuevo print
-                print(f"DEBUG: realizar_analisis_hidrologico_directo - out_transform después de mask: {out_transform}") # <-- Nuevo print
-                
-                if out_image.size == 0 or out_image.shape[1] == 0 or out_image.shape[2] == 0: # <-- Nueva comprobación
-                    results['message'] = "Error: El recorte del DEM para PySheds resultó en una imagen vacía o inválida."
-                    print(f"ERROR: realizar_analisis_hidrologico_directo - out_image está vacío o inválido: {out_image.shape}") # <-- Nuevo print
-                    return results
-
-                out_meta = src_global.meta.copy()
-                out_meta.update({"driver": "GTiff", "height": out_image.shape[1], "width": out_image.shape[2], "transform": out_transform, "compress": "NONE"})
-
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.tif') as tmp_dem_pysheds:
-                    with rasterio.open(tmp_dem_pysheds.name, 'w', **out_meta) as dst:
-                        dst.write(out_image)
-                    dem_path_for_pysheds = tmp_dem_pysheds.name
-                print(f"DEBUG: realizar_analisis_hidrologico_directo - DEM temporal para PySheds guardado en: {dem_path_for_pysheds}") # <-- Nuevo print
-
-        # --- PASO 2: PROCESAMIENTO HIDROLÓGICO CON PYSHEDS (CÓDIGO ORIGINAL) ---
-        no_data_value = out_meta.get('nodata', -32768)
-        print(f"DEBUG: realizar_analisis_hidrologico_directo - Iniciando Grid.from_raster con {dem_path_for_pysheds}") # <-- Nuevo print
-        grid = Grid.from_raster(dem_path_for_pysheds, nodata=no_data_value)
-        print(f"DEBUG: realizar_analisis_hidrologico_directo - Grid creado. Extent: {grid.extent}") # <-- Nuevo print
-        dem = grid.read_raster(dem_path_for_pysheds, nodata=no_data_value)
-        print(f"DEBUG: realizar_analisis_hidrologico_directo - DEM leído por Grid. Shape: {dem.shape}") # <-- Nuevo print
-
-        # Ajustamos las coordenadas del punto de salida al nuevo DEM recortado
-        x_snap, y_snap = grid.snap_to_mask(grid.accumulation(grid.flowdir(grid.fill_depressions(grid.fill_pits(dem)))) > umbral_rio_export, (x_dem_crs, y_dem_crs))
-        
-        # Si el punto de snap está fuera del DEM recortado, ajustamos.
-        if not (grid.extent[0] <= x_snap <= grid.extent[1] and grid.extent[2] <= y_snap <= grid.extent[3]):
-            results['message'] = "El punto de desagüe se encuentra demasiado cerca del borde del DEM recortado para el análisis. Intente un punto más central."
-            return results
-
-        pit_filled_dem = grid.fill_pits(dem)
-        flooded_dem = grid.fill_depressions(pit_filled_dem)
-        conditioned_dem = grid.resolve_flats(flooded_dem)
-        flowdir = grid.flowdir(conditioned_dem)
-        acc = grid.accumulation(flowdir)
-        
-        # Re-snap al DEM recortado
-        x_snap, y_snap = grid.snap_to_mask(acc > umbral_rio_export, (x_dem_crs, y_dem_crs))
-        catch = grid.catchment(x=x_snap, y=y_snap, fdir=flowdir, xytype="coordinate")
-
-        # --- AÑADIDO: Verificar si la cuenca delineada está vacía ---
-        # Si 'catch' no contiene ningún píxel True, la cuenca está vacía.
-        if not np.any(catch): 
-            results['message'] = "Advertencia: No se pudo delinear una cuenca para el punto y umbral seleccionados. Intente un punto diferente o ajuste el umbral de acumulación. Asegúrese de que el punto esté sobre un cauce con suficiente área de drenaje."
-            results['success'] = False
-            return results
-        # --- FIN AÑADIDO ---
-        
-        # --- PASO 3: INICIALIZACIÓN DE PYFLWDIR (CÓDIGO ORIGINAL) ---
-        # PyFlwdir también puede abrir el DEM recortado
-        flw = pyflwdir.from_dem(data=out_image[0], nodata=no_data_value, transform=out_transform, latlon=False)
-        upa = flw.upstream_area(unit='cell')
-
-        # --- PASO 4: GENERACIÓN DE GRÁFICOS Y MÉTRICAS (CÓDIGO ORIGINAL) ---
-        # Asegúrate de que las llamadas a imshow y plot usen 'grid_para_plot.extent' o 'grid.extent'
-        # y que los datos de elevación sean 'conditioned_dem' o 'dem_data' según corresponda.
-
-        # GRÁFICO 1: MOSAICO DE CARACTERÍSTICAS
-        grid_para_plot = Grid.from_raster(dem_path_for_pysheds, nodata=no_data_value)
-        grid_para_plot.clip_to(catch)
-        plot_extent = grid_para_plot.extent
-        fig1, axes = plt.subplots(2, 2, figsize=(12, 10))
-        axes[0, 0].imshow(grid_para_plot.view(catch, nodata=np.nan), extent=plot_extent, cmap='Reds_r')
-        axes[0, 0].set_title("Extensión de la Cuenca")
-        num_celdas_cuenca = np.sum(catch)
-        area_pixel_m2 = abs(grid.affine.a * grid.affine.e)
-        area_cuenca_km2 = (num_celdas_cuenca * area_pixel_m2) / 1_000_000
-        area_texto = f'{area_cuenca_km2:.1f} km²'
-        centro_x = (plot_extent[0] + plot_extent[1]) / 2
-        centro_y = (plot_extent[2] + plot_extent[3]) / 2
-        axes[0, 0].text(centro_x, centro_y, area_texto, ha='center', va='center', color='white', fontsize=12, fontweight='bold')
-        im_dem = axes[0, 1].imshow(grid_para_plot.view(conditioned_dem, nodata=np.nan), extent=plot_extent, cmap='terrain')
-        axes[0, 1].set_title("Elevación")
-        fig1.colorbar(im_dem, ax=axes[0, 1], label='Elevación (m)', shrink=0.7)
-        im_fdir = axes[1, 0].imshow(grid_para_plot.view(flowdir, nodata=np.nan), extent=plot_extent, cmap='twilight')
-        axes[1, 0].set_title("Dirección de Flujo")
-        im_acc = axes[1, 1].imshow(grid_para_plot.view(acc, nodata=np.nan), extent=plot_extent, cmap='cubehelix', norm=colors.LogNorm(vmin=1, vmax=acc.max()))
-        axes[1, 1].set_title("Acumulación de Flujo")
-        fig1.colorbar(im_acc, ax=axes[1, 1], label='Nº celdas', shrink=0.7)
-        for ax in axes.flat: ax.tick_params(axis='both', labelsize=6)
-        plt.suptitle("Características de la Cuenca Delineada", fontsize=16)
-        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-        results['plots']['grafico_1_mosaico'] = fig_to_base64(fig1)
-
-        # CÁLCULOS DEL LONGEST FLOW PATH (LFP)
-        dist = grid._d8_flow_distance(x=x_snap, y=y_snap, fdir=flowdir, xytype='coordinate')
-        dist_catch = np.where(catch, dist, -1)
-        start_row, start_col = np.unravel_index(np.argmax(dist_catch), dist_catch.shape)
-        dirmap = {1:(0,1), 2:(1,1), 4:(1,0), 8:(1,-1), 16:(0,-1), 32:(-1,-1), 64:(-1,0), 128:(-1,1)}
-        lfp_coords = []
-        current_row, current_col = start_row, start_col
-        with rasterio.open(dem_path_for_pysheds) as src_pysheds: raster_transform = src_pysheds.transform
-        while catch[current_row, current_col]:
-            x_coord, y_coord = raster_transform * (current_col, current_row); x_coord += raster_transform.a / 2.0; y_coord += raster_transform.e / 2.0
-            lfp_coords.append((x_coord, y_coord))
-            direction = flowdir[current_row, current_col]
-            if direction == 0: break
-            row_move, col_move = dirmap[direction]; current_row += row_move; current_col += col_move
-
-        # GRÁFICO 3/7 UNIFICADO: LFP y Red Fluvial de Strahler
-        stream_mask_strahler = upa > umbral_rio_export
-        strahler_orders = flw.stream_order(mask=stream_mask_strahler, type='strahler')
-        stream_features = flw.streams(mask=stream_mask_strahler, strord=strahler_orders)
-        gdf_streams_full = gpd.GeoDataFrame.from_features(stream_features, crs=src_global.crs) # Usamos el CRS original del DEM
-        shapes_cuenca_clip = features.shapes(catch.astype(np.uint8), mask=catch, transform=out_transform) # Usamos out_transform
-
-        cuenca_geoms_list = [Polygon(s['coordinates'][0]) for s, v in shapes_cuenca_clip if v == 1]
-        
-        # --- AÑADIDO: Verificar si se extrajo alguna geometría de la cuenca ---
-        if not cuenca_geoms_list:
-            results['message'] = "Error interno: No se pudo extraer la geometría vectorial de la cuenca. Esto puede indicar un problema con la delineación o un tamaño de cuenca extremadamente pequeño."
-            results['success'] = False
-            return results
-        # --- FIN AÑADIDO ---
-
-        cuenca_geom_clip = [Polygon(s['coordinates'][0]) for s, v in shapes_cuenca_clip if v == 1][0]
-        gdf_cuenca_clip = gpd.GeoDataFrame(geometry=[cuenca_geom_clip], crs=src_global.crs)
-
-        # --- AÑADIDO: Recorte de ríos si la cuenca no es válida (solo por seguridad) ---
-        # Aseguramos que gdf_streams_full tenga un CRS antes de clip
-        if gdf_streams_full.crs is None:
-            gdf_streams_full.crs = src_global.crs # Asignar el CRS si no lo tiene
-        
-        # Asegurar que gdf_cuenca_clip tenga un CRS válido para el clip
-        if gdf_cuenca_clip.crs is None:
-            gdf_cuenca_clip.crs = src_global.crs # Asignar el CRS si no lo tiene
-        
         try:
-            gdf_streams_recortado = gpd.clip(gdf_streams_full, gdf_cuenca_clip)
-        except Exception as clip_e:
-            results['message'] = f"Advertencia: Falló el recorte de los ríos a la cuenca: {clip_e}. Los resultados de ríos podrían estar incompletos."
-            gdf_streams_recortado = gpd.GeoDataFrame(geometry=[], crs=src_global.crs) # Crear un GeoDataFrame vacío
-        # --- FIN AÑADIDO ---
-        
-        gdf_streams_recortado = gpd.clip(gdf_streams_full, gdf_cuenca_clip)
-        dem_cuenca_recortada = grid_para_plot.view(conditioned_dem, nodata=np.nan)
-        fig37, axes = plt.subplots(1, 2, figsize=(18, 9))
-        ax1 = axes[0]
-        im1 = ax1.imshow(dem_cuenca_recortada, extent=grid_para_plot.extent, cmap='terrain', zorder=1)
-        fig37.colorbar(im1, ax=ax1, label='Elevación (m)', shrink=0.6)
-        x_coords, y_coords = zip(*lfp_coords)
-        ax1.plot(x_coords, y_coords, color='red', linewidth=2, label='Longest Flow Path', zorder=2)
-        ax1.set_title('Camino de Flujo Más Largo (LFP)'); ax1.legend(); ax1.grid(True, linestyle='--', alpha=0.6)
-        ax2 = axes[1]
-        ax2.imshow(dem_cuenca_recortada, extent=grid_para_plot.extent, cmap='Greys_r', alpha=0.8, zorder=1)
-        gdf_streams_recortado_clean = gdf_streams_recortado[gdf_streams_recortado.geom_type.isin(["LineString", "MultiLineString"])]
-        if not gdf_streams_recortado_clean.empty:
-            gdf_streams_recortado_clean.plot(ax=ax2, column='strord', cmap='Blues', zorder=2, legend=True, categorical=True, legend_kwds={'title': "Orden de Strahler", 'loc': 'upper right'})
-        else:
-            ax2.text(0.5, 0.5, 'No se encontraron ríos\ncon el umbral actual', horizontalalignment='center', verticalalignment='center', transform=ax2.transAxes, bbox=dict(facecolor='white', alpha=0.8))
-        ax2.set_title('Red Fluvial por Orden de Strahler')
-        plt.suptitle("Análisis Morfométrico de la Cuenca", fontsize=16)
-        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-        results['plots']['grafico_3_7_lfp_strahler'] = fig_to_base64(fig37)
+            # Reabrir el DEM global cada vez si dem_url es una URL.
+            # O mejor, si ya tenemos los bytes, solo procesarlos.
+            # Aquí asumimos que dem_url es el dem_bytes ya cargado.
+            with rasterio.io.MemoryFile(dem_url) as memfile:
+                with memfile.open() as src_global:
+                    print(f"DEBUG: realizar_analisis_hidrologico_directo - DEM global abierto desde MemoryFile. CRS: {src_global.crs}, Bounds: {src_global.bounds}") # <-- Añadir bounds
+                    transformer_wgs84_to_dem_crs = Transformer.from_crs("EPSG:4326", src_global.crs, always_xy=True)
+                    x_dem_crs, y_dem_crs = transformer_wgs84_to_dem_crs.transform(outlet_coords_wgs84['lng'], outlet_coords_wgs84['lat'])
 
-        # GRÁFICO 4: PERFIL LONGITUDINAL Y MÉTRICAS LFP
-        with rasterio.open(dem_path_for_pysheds) as src_pysheds: inv_transform = ~src_pysheds.transform
-        profile_elevations, valid_lfp_coords = [], []
-        for x_c, y_c in lfp_coords:
+                    buffer_size_for_pysheds = 5000 # Mantener este buffer para el recorte del DEM
+                    bbox_utm = (x_dem_crs - buffer_size_for_pysheds, y_dem_crs - buffer_size_for_pysheds,
+                                x_dem_crs + buffer_size_for_pysheds, y_dem_crs + buffer_size_for_pysheds)
+
+                    out_image, out_transform = mask(src_global, [Polygon.from_bounds(*bbox_utm)], crop=True, nodata=src_global.nodata)
+                    
+                    if out_image.size == 0 or out_image.shape[1] == 0 or out_image.shape[2] == 0:
+                        # Si el recorte inicial ya está vacío, es un fallo general, no de snap_to_mask
+                        temp_results['message'] = "Error: El recorte inicial del DEM para PySheds resultó en una imagen vacía o inválida."
+                        return temp_results
+
+                    out_meta = src_global.meta.copy()
+                    out_meta.update({"driver": "GTiff", "height": out_image.shape[1], "width": out_image.shape[2], "transform": out_transform, "compress": "NONE"})
+
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.tif') as tmp_dem_pysheds_file:
+                        with rasterio.open(tmp_dem_pysheds_file.name, 'w', **out_meta) as dst:
+                            dst.write(out_image)
+                        temp_dem_path_for_pysheds = tmp_dem_pysheds_file.name
+
+            no_data_value = out_meta.get('nodata', -32768)
+            grid = Grid.from_raster(temp_dem_path_for_pysheds, nodata=no_data_value)
+            dem = grid.read_raster(temp_dem_path_for_pysheds, nodata=no_data_value)
+
+            pit_filled_dem = grid.fill_pits(dem)
+            flooded_dem = grid.fill_depressions(pit_filled_dem)
+            conditioned_dem = grid.resolve_flats(flooded_dem)
+            flowdir = grid.flowdir(conditioned_dem)
+            acc = grid.accumulation(flowdir)
+            
+            # --- Lógica para el radio de búsqueda (vecindario de píxeles) ---
+            # Convertir coordenadas UTM del clic a coordenadas de píxel para el DEM de pysheds
+            row_initial, col_initial = grid.affine_to_coords((x_dem_crs, y_dem_crs))
+            # Crear un pequeño vecindario de píxeles alrededor del clic
+            search_points = []
+            for r_offset in range(-SNAP_SEARCH_RADIUS_PIXELS, SNAP_SEARCH_RADIUS_PIXELS + 1):
+                for c_offset in range(-SNAP_SEARCH_RADIUS_PIXELS, SNAP_SEARCH_RADIUS_PIXELS + 1):
+                    px_row, px_col = int(row_initial + r_offset), int(col_initial + c_offset)
+                    # Convertir el centro del píxel de nuevo a coordenadas UTM
+                    x_center, y_center = grid.coords_to_affine((px_row + 0.5, px_col + 0.5))
+                    search_points.append((x_center, y_center))
+            
+            snapped_successfully = False
+            for test_x, test_y in search_points:
+                try:
+                    # Intenta snap_to_mask con cada punto del vecindario
+                    x_snap, y_snap = grid.snap_to_mask(acc > intento_umbral, (test_x, test_y))
+                    snapped_successfully = True
+                    break # Si se encuentra un snap, sal del bucle de puntos de búsqueda
+                except IndexError:
+                    continue # Sigue buscando en el vecindario
+
+            if not snapped_successfully:
+                raise IndexError("No se pudo encontrar un punto de desagüe válido en el área de búsqueda.") # Lanza para que el except exterior lo capture.
+
+            if not (grid.extent[0] <= x_snap <= grid.extent[1] and grid.extent[2] <= y_snap <= grid.extent[3]):
+                temp_results['message'] = "El punto de desagüe se encuentra demasiado cerca del borde del DEM recortado para el análisis. Intente un punto más central."
+                raise Exception(temp_results['message']) # Lanza para que se pruebe el siguiente umbral si es un fallo
+
+            catch = grid.catchment(x=x_snap, y=y_snap, fdir=flowdir, xytype="coordinate")
+
+            if not np.any(catch):
+                temp_results['message'] = "Advertencia: No se pudo delinear una cuenca para el punto y umbral seleccionados. Intente un punto diferente o ajuste el umbral de acumulación."
+                raise Exception(temp_results['message']) # Lanza para que se pruebe el siguiente umbral si es un fallo
+
+            # Si llegamos aquí, el snap y la delineación con este umbral fueron exitosos.
+            # Continuar con la generación de gráficos y exportación.
+            # Copiar los resultados temporales a los resultados finales
+            results = temp_results # Actualizar results con los resultados parciales del intento
+            results['success'] = True
+            results['message'] = f"Cálculo completado con éxito con umbral de {intento_umbral} celdas "
+            if intento_umbral != umbral_rio_export:
+                results['message'] += f"(se ajustó automáticamente desde {umbral_rio_export})."
+            else:
+                results['message'] += "(umbral del usuario)."
+            
+            # ... (Resto del código de gráficos y exportación, usando 'catch', 'conditioned_dem', 'flowdir', 'acc') ...
+            # Esto es lo que se ejecuta UNA VEZ que se encuentra un umbral válido.
+            # Asegúrate de usar las variables 'catch', 'conditioned_dem', etc. que se calcularon en este intento.
+
+            flw = pyflwdir.from_dem(data=out_image[0], nodata=no_data_value, transform=out_transform, latlon=False)
+            upa = flw.upstream_area(unit='cell')
+
+            # GRÁFICO 1: MOSAICO DE CARACTERÍSTICAS
+            grid_para_plot = Grid.from_raster(temp_dem_path_for_pysheds, nodata=no_data_value)
+            grid_para_plot.clip_to(catch)
+            plot_extent = grid_para_plot.extent
+            fig1, axes = plt.subplots(2, 2, figsize=(12, 10))
+            axes[0, 0].imshow(grid_para_plot.view(catch, nodata=np.nan), extent=plot_extent, cmap='Reds_r')
+            axes[0, 0].set_title("Extensión de la Cuenca")
+            num_celdas_cuenca = np.sum(catch)
+            area_pixel_m2 = abs(grid.affine.a * grid.affine.e)
+            area_cuenca_km2 = (num_celdas_cuenca * area_pixel_m2) / 1_000_000
+            area_texto = f'{area_cuenca_km2:.1f} km²'
+            centro_x = (plot_extent[0] + plot_extent[1]) / 2
+            centro_y = (plot_extent[2] + plot_extent[3]) / 2
+            axes[0, 0].text(centro_x, centro_y, area_texto, ha='center', va='center', color='white', fontsize=12, fontweight='bold')
+            im_dem = axes[0, 1].imshow(grid_para_plot.view(conditioned_dem, nodata=np.nan), extent=plot_extent, cmap='terrain')
+            axes[0, 1].set_title("Elevación")
+            fig1.colorbar(im_dem, ax=axes[0, 1], label='Elevación (m)', shrink=0.7)
+            im_fdir = axes[1, 0].imshow(grid_para_plot.view(flowdir, nodata=np.nan), extent=plot_extent, cmap='twilight')
+            axes[1, 0].set_title("Dirección de Flujo")
+            im_acc = axes[1, 1].imshow(grid_para_plot.view(acc, nodata=np.nan), extent=plot_extent, cmap='cubehelix', norm=colors.LogNorm(vmin=1, vmax=acc.max()))
+            axes[1, 1].set_title("Acumulación de Flujo")
+            fig1.colorbar(im_acc, ax=axes[1, 1], label='Nº celdas', shrink=0.7)
+            for ax in axes.flat: ax.tick_params(axis='both', labelsize=6)
+            plt.suptitle("Características de la Cuenca Delineada", fontsize=16)
+            plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+            results['plots']['grafico_1_mosaico'] = fig_to_base64(fig1)
+
+            # CÁLCULOS DEL LONGEST FLOW PATH (LFP)
+            dist = grid._d8_flow_distance(x=x_snap, y=y_snap, fdir=flowdir, xytype='coordinate')
+            dist_catch = np.where(catch, dist, -1)
+            start_row, start_col = np.unravel_index(np.argmax(dist_catch), dist_catch.shape)
+            dirmap = {1:(0,1), 2:(1,1), 4:(1,0), 8:(1,-1), 16:(0,-1), 32:(-1,-1), 64:(-1,0), 128:(-1,1)}
+            lfp_coords = []
+            current_row, current_col = start_row, start_col
+            with rasterio.open(temp_dem_path_for_pysheds) as src_pysheds: raster_transform = src_pysheds.transform
+            while catch[current_row, current_col]:
+                x_coord, y_coord = raster_transform * (current_col, current_row); x_coord += raster_transform.a / 2.0; y_coord += raster_transform.e / 2.0
+                lfp_coords.append((x_coord, y_coord))
+                direction = flowdir[current_row, current_col]
+                if direction == 0: break
+                row_move, col_move = dirmap[direction]; current_row += row_move; current_col += col_move
+
+            # GRÁFICO 3/7 UNIFICADO: LFP y Red Fluvial de Strahler
+            stream_mask_strahler = upa > intento_umbral # Usar el umbral actual
+            strahler_orders = flw.stream_order(mask=stream_mask_strahler, type='strahler')
+            stream_features = flw.streams(mask=stream_mask_strahler, strord=strahler_orders)
+            gdf_streams_full = gpd.GeoDataFrame.from_features(stream_features, crs=src_global.crs)
+            shapes_cuenca_clip = features.shapes(catch.astype(np.uint8), mask=catch, transform=out_transform)
+            cuenca_geoms_list = [Polygon(s['coordinates'][0]) for s, v in shapes_cuenca_clip if v == 1]
+            
+            if not cuenca_geoms_list:
+                results['message'] = "Error interno: No se pudo extraer la geometría vectorial de la cuenca. Esto puede indicar un problema con la delineación o un tamaño de cuenca extremadamente pequeño."
+                results['success'] = False
+                raise Exception(results['message']) # Lanza para salir del bucle.
+            
+            cuenca_geom_clip = cuenca_geoms_list[0] 
+            gdf_cuenca_clip = gpd.GeoDataFrame(geometry=[cuenca_geom_clip], crs=src_global.crs)
+            
+            if gdf_streams_full.crs is None:
+                gdf_streams_full.crs = src_global.crs
+            if gdf_cuenca_clip.crs is None:
+                gdf_cuenca_clip.crs = src_global.crs
+            
             try:
-                col, row = inv_transform * (x_c, y_c)
-                elevation = conditioned_dem[int(row), int(col)]
-                profile_elevations.append(elevation); valid_lfp_coords.append((x_c, y_c))
-            except IndexError: continue
-        profile_distances = [0]
-        for i in range(1, len(valid_lfp_coords)):
-            x1, y1 = valid_lfp_coords[i-1]; x2, y2 = valid_lfp_coords[i]
-            profile_distances.append(profile_distances[-1] + np.sqrt((x2 - x1)**2 + (y2 - y1)**2))
-        results['lfp_profile_data'] = {"distancia_m": profile_distances, "elevacion_m": profile_elevations}
-        longitud_total_m = profile_distances[-1]
-        cota_ini, cota_fin = profile_elevations[0], profile_elevations[-1]
-        desnivel = abs(cota_fin - cota_ini)
-        pendiente_media = desnivel / longitud_total_m if longitud_total_m > 0 else 0
-        tc_h = (0.87 * (longitud_total_m**2 / (1000 * desnivel))**0.385) if desnivel > 0 else 0
-        results['lfp_metrics'] = {"cota_ini_m": cota_ini, "cota_fin_m": cota_fin, "longitud_m": longitud_total_m, "pendiente_media": pendiente_media, "tc_h": tc_h, "tc_min": tc_h * 60}
-        fig4, ax = plt.subplots(figsize=(12, 6))
-        ax.plot(np.array(profile_distances) / 1000, profile_elevations, color='darkblue')
-        ax.fill_between(np.array(profile_distances) / 1000, profile_elevations, alpha=0.2, color='lightblue')
-        ax.set_title('Perfil Longitudinal del LFP'); ax.set_xlabel('Distancia (km)'); ax.set_ylabel('Elevación (m)'); ax.grid(True)
-        results['plots']['grafico_4_perfil_lfp'] = fig_to_base64(fig4)
+                gdf_streams_recortado = gpd.clip(gdf_streams_full, gdf_cuenca_clip)
+            except Exception as clip_e:
+                results['message'] = f"Advertencia: Falló el recorte de los ríos a la cuenca: {clip_e}. Los resultados de ríos podrían estar incompletos."
+                gdf_streams_recortado = gpd.GeoDataFrame(geometry=[], crs=src_global.crs)
 
-        # GRÁFICOS 5 y 6: HISTOGRAMA Y CURVA HIPSOMÉTRICA
-        elevaciones_cuenca = conditioned_dem[catch]
-        fig56, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
-        ax1.hist(elevaciones_cuenca, bins=50, color='skyblue', edgecolor='black')
-        ax1.set_title('Distribución de Elevaciones'); ax1.set_xlabel('Elevación (m)'); ax1.set_ylabel('Frecuencia')
-        elev_sorted = np.sort(elevaciones_cuenca)[::-1]
-        cell_area = abs(out_transform.a * out_transform.e) # Usamos out_transform
-        area_acumulada = np.arange(1, len(elev_sorted) + 1) * cell_area
-        area_normalizada = area_acumulada / area_acumulada.max()
-        elev_normalizada = (elev_sorted - elev_sorted.min()) / (elev_sorted.max() - elev_sorted.min())
-        integral_hipsometrica = abs(np.trapz(area_normalizada, x=elev_normalizada))
-        results['hypsometric_data'] = {"area_normalizada": area_normalizada.tolist(), "elevacion": elev_sorted.tolist()}
-        elev_min, elev_max = elev_sorted.min(), elev_sorted.max()
-        ax2.plot(area_normalizada, elev_sorted, color='red', linewidth=2, label='Curva Hipsométrica')
-        ax2.fill_between(area_normalizada, elev_sorted, elev_min, color='red', alpha=0.2)
-        ax2.plot([0, 1], [elev_max, elev_min], color='gray', linestyle='--', linewidth=2, label='Referencia lineal (HI=0.5)')
-        ax2.text(0.05, 0.1, f'Integral Hipsométrica: {integral_hipsometrica:.3f}', transform=ax2.transAxes, fontsize=12, bbox=dict(facecolor='white', alpha=0.8))
-        ax2.set_title('Curva Hipsométrica'); ax2.set_xlabel('Fracción de área (a/A)'); ax2.set_ylabel('Elevación (m)'); ax2.legend(); ax2.set_xlim(0, 1)
-        results['plots']['grafico_5_6_histo_hipso'] = fig_to_base64(fig56)
+            dem_cuenca_recortada = grid_para_plot.view(conditioned_dem, nodata=np.nan)
+            fig37, axes = plt.subplots(1, 2, figsize=(18, 9))
+            ax1 = axes[0]
+            im1 = ax1.imshow(dem_cuenca_recortada, extent=grid_para_plot.extent, cmap='terrain', zorder=1)
+            fig37.colorbar(im1, ax=ax1, label='Elevación (m)', shrink=0.6)
+            x_coords, y_coords = zip(*lfp_coords)
+            ax1.plot(x_coords, y_coords, color='red', linewidth=2, label='Longest Flow Path', zorder=2)
+            ax1.set_title('Camino de Flujo Más Largo (LFP)'); ax1.legend(); ax1.grid(True, linestyle='--', alpha=0.6)
+            ax2 = axes[1]
+            ax2.imshow(dem_cuenca_recortada, extent=grid_para_plot.extent, cmap='Greys_r', alpha=0.8, zorder=1)
+            gdf_streams_recortado_clean = gdf_streams_recortado[gdf_streams_recortado.geom_type.isin(["LineString", "MultiLineString"])]
+            if not gdf_streams_recortado_clean.empty:
+                gdf_streams_recortado_clean.plot(ax=ax2, column='strord', cmap='Blues', zorder=2, legend=True, categorical=True, legend_kwds={'title': "Orden de Strahler", 'loc': 'upper right'})
+            else:
+                ax2.text(0.5, 0.5, 'No se encontraron ríos\ncon el umbral actual', horizontalalignment='center', verticalalignment='center', transform=ax2.transAxes, bbox=dict(facecolor='white', alpha=0.8))
+            ax2.set_title('Red Fluvial por Orden de Strahler')
+            plt.suptitle("Análisis Morfométrico de la Cuenca", fontsize=16)
+            plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+            results['plots']['grafico_3_7_lfp_strahler'] = fig_to_base64(fig37)
 
-        # GRÁFICO 11: HAND Y LLANURAS DE INUNDACIÓN
-        # Para pyflwdir, necesitamos el DEM recortado
-        flw_recortado = pyflwdir.from_dem(data=out_image[0], nodata=no_data_value, transform=out_transform, latlon=False)
-        upa_km2 = flw_recortado.upstream_area(unit='km2')
-        upa_min_threshold = 1.0
-        hand = flw_recortado.hand(drain=upa_km2 > upa_min_threshold, elevtn=out_image[0])
-        floodplains = flw_recortado.floodplains(elevtn=out_image[0], uparea=upa_km2, upa_min=upa_min_threshold)
-        
-        dem_background = np.where(catch, conditioned_dem, np.nan)
-        hand_masked = np.where(catch & (hand > 0), hand, np.nan)
-        floodplains_masked = np.where(catch & (floodplains > 0), 1.0, np.nan)
-        fig11, axes = plt.subplots(1, 2, figsize=(18, 9))
-        ax1, ax2 = axes[0], axes[1]
-        xmin, xmax, ymin, ymax = grid_para_plot.extent
-        ax1.imshow(dem_background, extent=grid.extent, cmap='Greys_r', zorder=1)
-        vmax_hand = np.nanpercentile(hand_masked, 98) if not np.all(np.isnan(hand_masked)) else 1
-        im_hand = ax1.imshow(hand_masked, extent=grid.extent, cmap='gist_earth_r', alpha=0.7, zorder=2, vmin=0, vmax=vmax_hand)
-        fig11.colorbar(im_hand, ax=ax1, label='Altura sobre drenaje (m)', shrink=0.6)
-        ax1.set_title(f'Altura Sobre Drenaje (HAND)\n(upa_min > {upa_min_threshold:.1f} km²)')
-        ax1.set_xlabel('Coordenada X (UTM)'); ax1.set_ylabel('Coordenada Y (UTM)'); ax1.grid(True, linestyle='--', alpha=0.6)
-        ax1.set_xlim(xmin, xmax); ax1.set_ylim(ymin, ymax)
-        ax2.imshow(dem_background, extent=grid.extent, cmap='Greys', zorder=1)
-        ax2.imshow(floodplains_masked, extent=grid.extent, cmap='Blues', alpha=0.7, zorder=2, vmin=0, vmax=1)
-        ax2.set_title(f'Llanuras de Inundación\n(upa_min > {upa_min_threshold:.1f} km²)')
-        ax2.set_xlabel('Coordenada X (UTM)'); ax2.set_ylabel(''); ax2.grid(True, linestyle='--', alpha=0.6)
-        ax2.set_xlim(xmin, xmax); ax2.set_ylim(ymin, ymax)
-        fig11.suptitle("Índices de Elevación (HAND y Llanuras de Inundación)", fontsize=16)
-        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-        results['plots']['grafico_11_llanuras'] = fig_to_base64(fig11)
+            # GRÁFICO 4: PERFIL LONGITUDINAL Y MÉTRICAS LFP
+            with rasterio.open(temp_dem_path_for_pysheds) as src_pysheds: inv_transform = ~src_pysheds.transform
+            profile_elevations, valid_lfp_coords = [], []
+            for x_c, y_c in lfp_coords:
+                try:
+                    col, row = inv_transform * (x_c, y_c)
+                    elevation = conditioned_dem[int(row), int(col)]
+                    profile_elevations.append(elevation); valid_lfp_coords.append((x_c, y_c))
+                except IndexError: continue
+            profile_distances = [0]
+            for i in range(1, len(valid_lfp_coords)):
+                x1, y1 = valid_lfp_coords[i-1]; x2, y2 = valid_lfp_coords[i]
+                profile_distances.append(profile_distances[-1] + np.sqrt((x2 - x1)**2 + (y2 - y1)**2))
+            results['lfp_profile_data'] = {"distancia_m": profile_distances, "elevacion_m": profile_elevations}
+            longitud_total_m = profile_distances[-1]
+            if len(profile_elevations) > 0: # Evitar IndexError si profile_elevations está vacío
+                cota_ini, cota_fin = profile_elevations[0], profile_elevations[-1]
+            else:
+                cota_ini, cota_fin = np.nan, np.nan
+            desnivel = abs(cota_fin - cota_ini) if not np.isnan(cota_ini) and not np.isnan(cota_fin) else 0
+            pendiente_media = desnivel / longitud_total_m if longitud_total_m > 0 else 0
+            tc_h = (0.87 * (longitud_total_m**2 / (1000 * desnivel))**0.385) if desnivel > 0 else 0
+            results['lfp_metrics'] = {"cota_ini_m": cota_ini, "cota_fin_m": cota_fin, "longitud_m": longitud_total_m, "pendiente_media": pendiente_media, "tc_h": tc_h, "tc_min": tc_h * 60}
+            fig4, ax = plt.subplots(figsize=(12, 6))
+            ax.plot(np.array(profile_distances) / 1000, profile_elevations, color='darkblue')
+            ax.fill_between(np.array(profile_distances) / 1000, profile_elevations, alpha=0.2, color='lightblue')
+            ax.set_title('Perfil Longitudinal del LFP'); ax.set_xlabel('Distancia (km)'); ax.set_ylabel('Elevación (m)'); ax.grid(True)
+            results['plots']['grafico_4_perfil_lfp'] = fig_to_base64(fig4)
 
-        # --- PASO 5: EXPORTACIÓN A GEOMETRÍAS (CÓDIGO ORIGINAL) ---
-        output_crs = "EPSG:25830"
-        gdf_punto = gpd.GeoDataFrame({'id': [1], 'geometry': [Point(x_snap, y_snap)]}, crs=output_crs)
-        results['downloads']['punto_salida'] = gdf_punto.to_json()
-        gdf_lfp = gpd.GeoDataFrame({'id': [1], 'geometry': [LineString(lfp_coords)]}, crs=output_crs)
-        results['downloads']['lfp'] = gdf_lfp.to_json()
-        gdf_cuenca = gpd.GeoDataFrame({'id': [1], 'geometry': [cuenca_geom_clip]}, crs=output_crs)
-        results['downloads']['cuenca'] = gdf_cuenca.to_json()
-        river_raster = acc > umbral_rio_export
-        shapes_rios = features.shapes(river_raster.astype(np.uint8), mask=river_raster, transform=out_transform) # Usamos out_transform
-        river_geoms = [LineString(s['coordinates'][0]) for s, v in shapes_rios if v == 1]
-        gdf_rios_full = gpd.GeoDataFrame(geometry=river_geoms, crs=output_crs)
-        gdf_rios_recortado = gpd.clip(gdf_rios_full, gdf_cuenca)
-        gdf_rios_final = gdf_rios_recortado[gdf_rios_recortado.geom_type == 'LineString']
-        results['downloads']['rios'] = gdf_rios_final.to_json()
-        gdf_streams_recortado_clean.crs = output_crs # Aseguramos CRS para exportar
-        results['downloads']['rios_strahler'] = gdf_streams_recortado_clean.to_json()
-
-        # --- PASO 6: FINALIZAR Y DEVOLVER RESULTADOS ---
-        results['success'] = True
-        results['message'] = "Cálculo completado con éxito directamente desde la aplicación."
-
-    # except Exception as e:
-    #     results['message'] = f"Error en el análisis hidrológico directo: {traceback.format_exc()}"
-    #     results['success'] = False
-    # finally:
-    #     # Aseguramos que el archivo temporal de PySheds se elimine
-    #     if 'dem_path_for_pysheds' in locals() and os.path.exists(dem_path_for_pysheds):
-    #         os.remove(dem_path_for_pysheds)
-    # 
-    # return results
+            # GRÁFICOS 5 y 6: HISTOGRAMA Y CURVA HIPSOMÉTRICA
+            elevaciones_cuenca = conditioned_dem[catch]
+            if not elevaciones_cuenca.size == 0: # Evitar error si la cuenca está vacía
+                fig56, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
+                ax1.hist(elevaciones_cuenca, bins=50, color='skyblue', edgecolor='black')
+                ax1.set_title('Distribución de Elevaciones'); ax1.set_xlabel('Elevación (m)'); ax1.set_ylabel('Frecuencia')
+                elev_sorted = np.sort(elevaciones_cuenca)[::-1]
+                cell_area = abs(out_transform.a * out_transform.e)
+                area_acumulada = np.arange(1, len(elev_sorted) + 1) * cell_area
+                area_normalizada = area_acumulada / area_acumulada.max()
+                elev_normalizada = (elev_sorted - elev_sorted.min()) / (elev_sorted.max() - elev_sorted.min())
+                integral_hipsometrica = abs(np.trapz(area_normalizada, x=elev_normalizada))
+                results['hypsometric_data'] = {"area_normalizada": area_normalizada.tolist(), "elevacion": elev_sorted.tolist()}
+                elev_min, elev_max = elev_sorted.min(), elev_sorted.max()
+                ax2.plot(area_normalizada, elev_sorted, color='red', linewidth=2, label='Curva Hipsométrica')
+                ax2.fill_between(area_normalizada, elev_sorted, elev_min, color='red', alpha=0.2)
+                ax2.plot([0, 1], [elev_max, elev_min], color='gray', linestyle='--', linewidth=2, label='Referencia lineal (HI=0.5)')
+                ax2.text(0.05, 0.1, f'Integral Hipsométrica: {integral_hipsometrica:.3f}', transform=ax2.transAxes, fontsize=12, bbox=dict(facecolor='white', alpha=0.8))
+                ax2.set_title('Curva Hipsométrica'); ax2.set_xlabel('Fracción de área (a/A)'); ax2.set_ylabel('Elevación (m)'); ax2.legend(); ax2.set_xlim(0, 1)
+                results['plots']['grafico_5_6_histo_hipso'] = fig_to_base64(fig56)
+            else:
+                print("WARNING: Cuenca vacía, no se generarán histograma ni curva hipsométrica.")
+                results['plots']['grafico_5_6_histo_hipso'] = None # O una imagen de "no datos"
+                results['hypsometric_data'] = {}
 
 
-    except Exception as e:
-        # Aseguramos que 'results' sea un diccionario antes de intentar asignarle un mensaje
-        # Esto ya lo tenías, pero es importante reiterarlo.
-        if not isinstance(results, dict):
-            results = {"success": False}
-        
-        # Añadir un mensaje más informativo para el usuario
-        error_message = f"Error en el análisis hidrológico directo: {e}"
-        if "IndexError: list index out of range" in traceback.format_exc():
-            error_message += "\nSugerencia: El punto de desagüe o el umbral seleccionado no permitió delinear una cuenca válida o extraer sus geometrías. Intente un punto diferente o ajuste el umbral."
-        
-        results['message'] = f"{error_message}\n{traceback.format_exc()}"
-        results['success'] = False
-        print(f"ERROR: realizar_analisis_hidrologico_directo - Error general capturado: {e}")
-        print(traceback.format_exc())
-    finally:
-        # Aseguramos que el archivo temporal de PySheds se elimine
-        # dem_path_for_pysheds solo se define si el bloque try se ejecuta hasta cierto punto.
-        # Es más seguro verificar si existe en locals() antes de intentar eliminarlo.
-        if 'dem_path_for_pysheds' in locals() and os.path.exists(dem_path_for_pysheds):
-            try:
-                os.remove(dem_path_for_pysheds)
-                print(f"DEBUG: Archivo temporal eliminado: {dem_path_for_pysheds}")
-            except Exception as cleanup_e:
-                print(f"ERROR: Fallo al eliminar archivo temporal {dem_path_for_pysheds}: {cleanup_e}")
+            # GRÁFICO 11: HAND Y LLANURAS DE INUNDACIÓN
+            # Para pyflwdir, necesitamos el DEM recortado
+            # ... (código existente, asegurándose de usar intento_umbral) ...
+            flw_recortado = pyflwdir.from_dem(data=out_image[0], nodata=no_data_value, transform=out_transform, latlon=False)
+            upa_km2 = flw_recortado.upstream_area(unit='km2')
+            upa_min_threshold = (intento_umbral * abs(out_transform.a * out_transform.e)) / 1_000_000 # Convertir umbral_celdas a km2
+            # Ajustar upa_min_threshold si es muy pequeño para evitar NaN
+            upa_min_threshold = max(0.1, upa_min_threshold) 
+
+            hand = flw_recortado.hand(drain=upa_km2 > upa_min_threshold, elevtn=out_image[0])
+            floodplains = flw_recortado.floodplains(elevtn=out_image[0], uparea=upa_km2, upa_min=upa_min_threshold)
+            
+            dem_background = np.where(catch, conditioned_dem, np.nan)
+            hand_masked = np.where(catch & (hand > 0), hand, np.nan)
+            floodplains_masked = np.where(catch & (floodplains > 0), 1.0, np.nan)
+            fig11, axes = plt.subplots(1, 2, figsize=(18, 9))
+            ax1, ax2 = axes[0], axes[1]
+            xmin, xmax, ymin, ymax = grid_para_plot.extent
+            ax1.imshow(dem_background, extent=grid.extent, cmap='Greys_r', zorder=1)
+            vmax_hand = np.nanpercentile(hand_masked, 98) if not np.all(np.isnan(hand_masked)) else 1
+            im_hand = ax1.imshow(hand_masked, extent=grid.extent, cmap='gist_earth_r', alpha=0.7, zorder=2, vmin=0, vmax=vmax_hand)
+            fig11.colorbar(im_hand, ax=ax1, label='Altura sobre drenaje (m)', shrink=0.6)
+            ax1.set_title(f'Altura Sobre Drenaje (HAND)\n(upa_min > {upa_min_threshold:.1f} km²)')
+            ax1.set_xlabel('Coordenada X (UTM)'); ax1.set_ylabel('Coordenada Y (UTM)'); ax1.grid(True, linestyle='--', alpha=0.6)
+            ax1.set_xlim(xmin, xmax); ax1.set_ylim(ymin, ymax)
+            ax2.imshow(dem_background, extent=grid.extent, cmap='Greys', zorder=1)
+            ax2.imshow(floodplains_masked, extent=grid.extent, cmap='Blues', alpha=0.7, zorder=2, vmin=0, vmax=1)
+            ax2.set_title(f'Llanuras de Inundación\n(upa_min > {upa_min_threshold:.1f} km²)')
+            ax2.set_xlabel('Coordenada X (UTM)'); ax2.set_ylabel(''); ax2.grid(True, linestyle='--', alpha=0.6)
+            ax2.set_xlim(xmin, xmax); ax2.set_ylim(ymin, ymax)
+            fig11.suptitle("Índices de Elevación (HAND y Llanuras de Inundación)", fontsize=16)
+            plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+            results['plots']['grafico_11_llanuras'] = fig_to_base64(fig11)
+
+
+            # EXPORTACIÓN A GEOMETRÍAS
+            # ... (código existente, asegurándose de usar el umbral actual para river_raster y stream_mask_strahler) ...
+            output_crs = "EPSG:25830"
+            gdf_punto = gpd.GeoDataFrame({'id': [1], 'geometry': [Point(x_snap, y_snap)]}, crs=output_crs)
+            results['downloads']['punto_salida'] = gdf_punto.to_json()
+            gdf_lfp = gpd.GeoDataFrame({'id': [1], 'geometry': [LineString(lfp_coords)]}, crs=output_crs)
+            results['downloads']['lfp'] = gdf_lfp.to_json()
+            gdf_cuenca = gpd.GeoDataFrame({'id': [1], 'geometry': [cuenca_geom_clip]}, crs=output_crs)
+            results['downloads']['cuenca'] = gdf_cuenca.to_json()
+            river_raster = acc > intento_umbral # Usar el umbral actual
+            shapes_rios = features.shapes(river_raster.astype(np.uint8), mask=river_raster, transform=out_transform)
+            river_geoms = [LineString(s['coordinates'][0]) for s, v in shapes_rios if v == 1]
+            gdf_rios_full = gpd.GeoDataFrame(geometry=river_geoms, crs=output_crs)
+            gdf_rios_recortado_export = gpd.clip(gdf_rios_full, gdf_cuenca)
+            gdf_rios_final = gdf_rios_recortado_export[gdf_rios_recortado_export.geom_type == 'LineString']
+            results['downloads']['rios'] = gdf_rios_final.to_json()
+            gdf_streams_recortado_clean.crs = output_crs # Aseguramos CRS para exportar
+            results['downloads']['rios_strahler'] = gdf_streams_recortado_clean.to_json()
+
+            return results # Si este intento fue exitoso, retornamos y salimos del bucle principal
+            
+        except Exception as e:
+            # Capturar cualquier error inesperado dentro del bucle de intento.
+            # No lo imprimimos al usuario aún, solo en logs y reintentamos.
+            print(f"WARNING: Intento de delineación fallido con umbral {intento_umbral}: {e}")
+            if temp_dem_path_for_pysheds and os.path.exists(temp_dem_path_for_pysheds):
+                os.remove(temp_dem_path_for_pysheds)
+            
+            # Si es el último intento y falla, entonces sí asignamos el mensaje de error final
+            if intento_umbral == umbrales_a_probar[-1]:
+                results['message'] = (f"El análisis hidrológico falló después de múltiples intentos. "
+                                      f"No se pudo delinear una cuenca con umbrales de {umbral_rio_export} "
+                                      f"hasta {MIN_UMBRAL_CELAS_REINTENTO} celdas. "
+                                      f"Error del último intento: {e}\n{traceback.format_exc()}")
+                results['success'] = False
+                return results # Retornar el fallo final
+
+        finally:
+            # Aseguramos la eliminación del archivo temporal de PySheds creado en este intento
+            if temp_dem_path_for_pysheds and os.path.exists(temp_dem_path_for_pysheds):
+                try:
+                    os.remove(temp_dem_path_for_pysheds)
+                except Exception as cleanup_e:
+                    print(f"ERROR: Fallo al eliminar archivo temporal {temp_dem_path_for_pysheds}: {cleanup_e}")
+
+    # Si se llega aquí, significa que ningún umbral en umbrales_a_probar tuvo éxito.
+    results['message'] = (f"El análisis hidrológico no pudo completar la delineación "
+                          f"para el punto seleccionado con ningún umbral entre {umbral_rio_export} "
+                          f"y {MIN_UMBRAL_CELAS_REINTENTO} celdas. "
+                          f"Por favor, revise el punto o el rango de umbrales.")
+    results['success'] = False
     return results
-
 
 # ==============================================================================
 # SECCIÓN 4: FUNCIONES AUXILIARES DE LA PESTAÑA
