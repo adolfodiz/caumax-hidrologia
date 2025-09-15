@@ -37,9 +37,9 @@ from core_logic.gis_utils import get_local_path_from_url # Necesitamos esta para
 # ==============================================================================
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-HOJAS_MTN25_PATH = "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/caumax-hidrologia-data/MTN25_ACTUAL_ETRS89_Peninsula_Baleares_Canarias.zip"
+HOJAS_MTN25_PATH = "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/MTN25_ACTUAL_ETRS89_Peninsula_Baleares_Canarias.zip"
 # --- ¡CRÍTICO! Apunta al COG grande de 700MB ---
-DEM_NACIONAL_PATH = "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/caumax-hidrologia-data/MDT25_peninsula_UTM30N.tif"
+DEM_NACIONAL_PATH = "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/MDT25_peninsula_UTM30N.tif"
 BUFFER_METROS = 5000
 LIMITE_AREA_KM2 = 15000
 # --- ¡¡¡ESTA CONSTANTE FALTABA Y ES LA CAUSA DEL ERROR!!! ---
@@ -377,28 +377,38 @@ def procesar_datos_cuenca(basin_geojson_str):
         geom_para_interseccion = buffer_gdf.to_crs(hojas_gdf.crs)
         hojas = gpd.sjoin(hojas_gdf, geom_para_interseccion, how="inner", predicate="intersects").drop_duplicates(subset=['numero'])
         
-        # --- ¡CRÍTICO! Abrimos el DEM Nacional (COG) directamente desde la URL con rasterio ---
-        print(f"LOG: Abriendo DEM Nacional (COG) directamente desde URL: {DEM_NACIONAL_PATH}...")
-        with rasterio.open(DEM_NACIONAL_PATH) as src:
-            geom_recorte_gdf = buffer_gdf.to_crs(src.crs)
-            print("LOG: Iniciando operación de recorte del DEM (rasterio.mask)...")
-      
-            dem_recortado, trans_recortado = mask(dataset=src, shapes=geom_recorte_gdf.geometry, crop=True, nodata=src.nodata or -32768)
-            # El GeoTransform es una tupla (top_left_x, pixel_width, rotation_x, top_left_y, rotation_y, pixel_height)
-            # pixel_width es trans_recortado[1] y pixel_height es trans_recortado[5]
-            print(f"DEBUG: generar_dem - Operación de recorte del DEM finalizada. Resolución de píxel: {trans_recortado[1]}x{abs(trans_recortado[5])}. Shape: {dem_recortado.shape}") # <-- Print corregido
-            
-            meta = src.meta.copy(); 
-            meta.update({"driver": "GTiff", "height": dem_recortado.shape[1], "width": dem_recortado.shape[2], "transform": trans_recortado, "compress": "NONE"})            
-            
-            with io.BytesIO() as buffer:
-                with rasterio.open(buffer, 'w', **meta) as dst:
-                    dst.write(dem_recortado)
-                buffer.seek(0)
-                dem_bytes = buffer.read()
+        # --- ¡CRÍTICO! Abrimos el DEM Nacional directamente desde la URL con rasterio ---
+        print(f"LOG: Abriendo DEM Nacional directamente desde URL: {DEM_NACIONAL_PATH}...")
         
-        if dem_bytes is None:
-            st.error("La generación del DEM recortado falló (dem_bytes is None).")
+        dem_bytes = None # Inicializar dem_bytes fuera del try para asegurar que exista
+        try:
+            with rasterio.open(DEM_NACIONAL_PATH) as src:
+                geom_recorte_gdf = buffer_gdf.to_crs(src.crs)
+                print("LOG: Iniciando operación de recorte del DEM (rasterio.mask)...")
+                
+                dem_recortado, trans_recortado = mask(dataset=src, shapes=geom_recorte_gdf.geometry, crop=True, nodata=src.nodata or -32768)
+                print(f"DEBUG: generar_dem - Operación de recorte del DEM finalizada. Resolución de píxel: {trans_recortado[1]}x{abs(trans_recortado[5])}. Shape: {dem_recortado.shape}")
+                
+                meta = src.meta.copy(); 
+                meta.update({"driver": "GTiff", "height": dem_recortado.shape[1], "width": dem_recortado.shape[2], "transform": trans_recortado, "compress": "NONE"})            
+                
+                with io.BytesIO() as buffer:
+                    with rasterio.open(buffer, 'w', **meta) as dst:
+                        dst.write(dem_recortado)
+                    buffer.seek(0)
+                    dem_bytes = buffer.read()
+            
+        except rasterio.errors.RasterioIOError as e:
+            if "HTTP response code: 404" in str(e):
+                st.error(f"¡Error crítico! El MDT25 nacional no se encontró en la URL especificada para la Pestaña 2: `{DEM_NACIONAL_PATH}`. Por favor, verifica la URL o la existencia del archivo en tu bucket de Cloudflare R2 (¡asegúrate de que el nombre del archivo es exactamente el mismo, incluyendo mayúsculas y minúsculas!).")
+                print(f"ERROR RASTERIO 404: {e}")
+                return None
+            else:
+                raise e # Si es otro tipo de error de Rasterio, relanzarlo para que el except general lo capture.
+        # --- FIN DEL AÑADIDO ---
+        
+        if dem_bytes is None: # Esta comprobación es más relevante ahora
+            st.error("La generación del DEM recortado falló o no se obtuvo ningún dato.")
             return None
         
         print("LOG: Exportando GDF a ZIP...")
@@ -407,7 +417,7 @@ def procesar_datos_cuenca(basin_geojson_str):
         return { "cuenca_gdf": cuenca_gdf, "buffer_gdf": buffer_gdf.to_crs("EPSG:4326"), "hojas": hojas, "dem_bytes": dem_bytes, "dem_array": dem_recortado, "shp_zip_bytes": shp_zip_bytes }
 
     except Exception as e:
-        st.error("Ha ocurrido un error inesperado durante el procesamiento de la cuenca.")
+        st.error(f"Ha ocurrido un error inesperado durante el procesamiento de la cuenca: {e}")
         st.exception(e)
         print(f"ERROR TRACEBACK en procesar_datos_cuenca: {traceback.format_exc()}")
         return None
@@ -429,28 +439,40 @@ def procesar_datos_poligono(polygon_geojson_str):
         geom_para_interseccion = poly_gdf.to_crs(hojas_gdf.crs)
         hojas = gpd.sjoin(hojas_gdf, geom_para_interseccion, how="inner", predicate="intersects").drop_duplicates(subset=['numero'])
         
-        # --- ¡CRÍTICO! Abrimos el DEM Nacional (COG) directamente desde la URL con rasterio ---
-        print(f"LOG: Abriendo DEM Nacional (COG) directamente desde URL: {DEM_NACIONAL_PATH} para polígono...")
-        with rasterio.open(DEM_NACIONAL_PATH) as src:
-            geom_recorte_gdf = poly_gdf.to_crs(src.crs)
-            dem_recortado, trans_recortado = mask(dataset=src, shapes=geom_recorte_gdf.geometry, crop=True, nodata=src.nodata or -32768)
-            meta = src.meta.copy()
-            meta.update({"driver": "GTiff", "height": dem_recortado.shape[1], "width": dem_recortado.shape[2], "transform": trans_recortado, "compress": "NONE"}) # <-- Añadir "compress": "NONE"
-            with io.BytesIO() as buffer:
-                with rasterio.open(buffer, 'w', **meta) as dst:
-                    dst.write(dem_recortado)
-                buffer.seek(0)
-                dem_bytes = buffer.read()
+        # --- ¡CRÍTICO! Abrimos el DEM Nacional directamente desde la URL con rasterio ---
+        print(f"LOG: Abriendo DEM Nacional directamente desde URL: {DEM_NACIONAL_PATH} para polígono...")
+
+        # --- AÑADIDO: Bloque try-except específico para RasterioIOError ---
+        dem_bytes = None # Inicializar dem_bytes fuera del try
+        try:
+            with rasterio.open(DEM_NACIONAL_PATH) as src:
+                geom_recorte_gdf = poly_gdf.to_crs(src.crs)
+                dem_recortado, trans_recortado = mask(dataset=src, shapes=geom_recorte_gdf.geometry, crop=True, nodata=src.nodata or -32768)
+                meta = src.meta.copy()
+                meta.update({"driver": "GTiff", "height": dem_recortado.shape[1], "width": dem_recortado.shape[2], "transform": trans_recortado, "compress": "NONE"})
+                with io.BytesIO() as buffer:
+                    with rasterio.open(buffer, 'w', **meta) as dst:
+                        dst.write(dem_recortado)
+                    buffer.seek(0)
+                    dem_bytes = buffer.read()
+        except rasterio.errors.RasterioIOError as e:
+            if "HTTP response code: 404" in str(e):
+                st.error(f"¡Error crítico! El MDT25 nacional no se encontró en la URL especificada para la Pestaña 2: `{DEM_NACIONAL_PATH}`. Por favor, verifica la URL o la existencia del archivo en tu bucket de Cloudflare R2 (¡asegúrate de que el nombre del archivo es exactamente el mismo, incluyendo mayúsculas y minúsculas!).")
+                print(f"ERROR RASTERIO 404: {e}")
+                return {"error": f"MDT25 no encontrado. Verifica la URL: {DEM_NACIONAL_PATH}"} # Devolver un error específico
+            else:
+                raise e
+        # --- FIN DEL AÑADIDO ---
 
         if dem_bytes is None:
-            st.error("La generación del DEM recortado para el polígono falló.")
+            st.error("La generación del DEM recortado para el polígono falló o no se obtuvo ningún dato.")
             return None
             
         shp_zip_bytes = export_gdf_to_zip(poly_gdf, "contorno_poligono_manual")
         return { "poligono_gdf": poly_gdf, "hojas": hojas, "dem_bytes": dem_bytes, "dem_array": dem_recortado, "shp_zip_bytes": shp_zip_bytes, "area_km2": area_km2 }
 
     except Exception as e:
-        st.error("Ha ocurrido un error inesperado durante el procesamiento del polígono.")
+        st.error(f"Ha ocurrido un error inesperado durante el procesamiento del polígono: {e}")
         st.exception(e)
         print(traceback.format_exc())
         return None

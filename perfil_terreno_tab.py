@@ -22,9 +22,9 @@ import tempfile
 import requests # Necesario para descargar a MemoryFile en precalcular_acumulacion
 
 # --- 2. CONFIGURACIÓN Y RUTAS (Sin cambios) ---
-MDT25_PATH = "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/caumax-hidrologia-data/MDT25_peninsula_UTM30N.tif"
-CORINE_VISU_PATH = "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/caumax-hidrologia-data/CORINE_visual_COG.tif"
-CN_HIDRO_PATH = "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/caumax-hidrologia-data/CN_hidrologico_COG.tif"
+MDT25_PATH = "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/MDT25_peninsula_UTM30N.tif"
+CORINE_VISU_PATH = "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/CORINE_visual_COG.tif"
+CN_HIDRO_PATH = "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/CN_hidrologico_COG.tif"
 CORINE_COLOR_MAP = {111:'#E6004D',112:'#FF0000',121:'#CC4DF2',122:'#CC0000',123:'#E6CCCC',124:'#E6CCE6',131:'#A600CC',132:'#A64DCC',133:'#FF4DFF',141:'#FFA6FF',142:'#FFE6FF',211:'#FFFFA8',212:'#FFFF00',213:'#E6E600',221:'#E68000',222:'#F2A64D',223:'#E6A600',231:'#E6E64D',241:'#FFE6A6',242:'#FFE64D',243:'#E6CC4D',244:'#F2CCA6',311:'#80FF00',312:'#00A600',313:'#4DFF00',321:'#CCF24D',322:'#A6FF80',323:'#A6E64D',324:'#A6F200',331:'#E6E6E6',332:'#CCCCCC',333:'#CCFFCC',334:'#000000',335:'#A6E6CC',411:'#A6A6FF',412:'#4D4DFF',421:'#CCCCFF',422:'#E6E6FF',423:'#A6A6E6',511:'#00CCF2',512:'#80F2E6',521:'#00FFFF',522:'#A6FFFF',523:'#E6FFFF'}
 
 # --- 2. FUNCIONES DE LÓGICA (Adaptadas para COGs grandes) ---

@@ -380,6 +380,9 @@ with st.sidebar:
     # st.checkbox("Cauce Principal Calculado", value=True, key="show_main_channel", disabled=not st.session_state.main_channel_geojson)
     # --- FIN: LÍNEA ELIMINADA ---
     st.header("Información de la Región")
+    # --- INICIO DEL CAMBIO ---
+    # Asegúrate de que region_info siempre esté definida, incluso si es un diccionario vacío.
+    region_info = {} # Inicializar region_info aquí
     if st.session_state.results and st.session_state.results.get('region_info'):
         region_info = st.session_state.results['region_info']
         
@@ -398,6 +401,8 @@ with st.sidebar:
     else:
         st.markdown("Seleccione un punto y calcule para ver la información.")
 
+    # --- FIN DEL CAMBIO ---
+    
 st.title("CAUMAX y Herramientas Hidrológicas GIS")
 st.header("Mapa Interactivo")
 st.info("💡 **Consejo:** Para obtener los mejores resultados, haga clic directamente sobre o muy cerca de los cauces azules (Red Fluvial) superpuestos en el mapa.")
