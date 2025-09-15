@@ -21,6 +21,7 @@ from PIL import Image
 
 # --- Imports específicos del análisis hidrológico (traídos de delinear_cuenca.py) ---
 import traceback
+import requests
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 from matplotlib.lines import Line2D
@@ -31,7 +32,7 @@ from rasterio.mask import mask
 from rasterio import features
 import rasterio
 from core_logic.gis_utils import get_local_path_from_url # Necesitamos esta para los GPKG y ZIPs
-import requests
+
 
 # ==============================================================================
 # SECCIÓN 2: CONSTANTES Y CONFIGURACIÓN
@@ -57,18 +58,25 @@ def fig_to_base64(fig):
     plt.close(fig)
     return base64.b64encode(buf.getvalue()).decode('utf-8')
 
+# def realizar_analisis_hidrologico_directo(dem_url, outlet_coords_wgs84, umbral_rio_export):
+#     """
+#     Ejecuta el flujo de trabajo hidrológico completo directamente en la aplicación.
+#     Ahora lee el DEM directamente desde la URL.
+#     """
+#     results = {
+#         "success": False, "message": "", "plots": {}, "downloads": {},
+#         "lfp_metrics": {}, "hypsometric_data": {}, "lfp_profile_data": {}
+#     }
+    
 def realizar_analisis_hidrologico_directo(dem_url, outlet_coords_wgs84, umbral_rio_export):
     """
     Ejecuta el flujo de trabajo hidrológico completo directamente en la aplicación.
     Ahora lee el DEM directamente desde la URL.
     """
-    results = {
+    results = { # Asegúrate de que esta sea la ÚNICA inicialización de 'results'
         "success": False, "message": "", "plots": {}, "downloads": {},
         "lfp_metrics": {}, "hypsometric_data": {}, "lfp_profile_data": {}
     }
-    
-def realizar_analisis_hidrologico_directo(dem_url, outlet_coords_wgs84, umbral_rio_export):
-    results = { ... }
     try:
         if dem_url is None: # Comprobación de seguridad
             results['message'] = "Error: El DEM de entrada para el análisis hidrológico es None."
@@ -143,6 +151,14 @@ def realizar_analisis_hidrologico_directo(dem_url, outlet_coords_wgs84, umbral_r
         x_snap, y_snap = grid.snap_to_mask(acc > umbral_rio_export, (x_dem_crs, y_dem_crs))
         catch = grid.catchment(x=x_snap, y=y_snap, fdir=flowdir, xytype="coordinate")
 
+        # --- AÑADIDO: Verificar si la cuenca delineada está vacía ---
+        # Si 'catch' no contiene ningún píxel True, la cuenca está vacía.
+        if not np.any(catch): 
+            results['message'] = "Advertencia: No se pudo delinear una cuenca para el punto y umbral seleccionados. Intente un punto diferente o ajuste el umbral de acumulación. Asegúrese de que el punto esté sobre un cauce con suficiente área de drenaje."
+            results['success'] = False
+            return results
+        # --- FIN AÑADIDO ---
+        
         # --- PASO 3: INICIALIZACIÓN DE PYFLWDIR (CÓDIGO ORIGINAL) ---
         # PyFlwdir también puede abrir el DEM recortado
         flw = pyflwdir.from_dem(data=out_image[0], nodata=no_data_value, transform=out_transform, latlon=False)
@@ -200,8 +216,35 @@ def realizar_analisis_hidrologico_directo(dem_url, outlet_coords_wgs84, umbral_r
         stream_features = flw.streams(mask=stream_mask_strahler, strord=strahler_orders)
         gdf_streams_full = gpd.GeoDataFrame.from_features(stream_features, crs=src_global.crs) # Usamos el CRS original del DEM
         shapes_cuenca_clip = features.shapes(catch.astype(np.uint8), mask=catch, transform=out_transform) # Usamos out_transform
+
+        cuenca_geoms_list = [Polygon(s['coordinates'][0]) for s, v in shapes_cuenca_clip if v == 1]
+        
+        # --- AÑADIDO: Verificar si se extrajo alguna geometría de la cuenca ---
+        if not cuenca_geoms_list:
+            results['message'] = "Error interno: No se pudo extraer la geometría vectorial de la cuenca. Esto puede indicar un problema con la delineación o un tamaño de cuenca extremadamente pequeño."
+            results['success'] = False
+            return results
+        # --- FIN AÑADIDO ---
+
         cuenca_geom_clip = [Polygon(s['coordinates'][0]) for s, v in shapes_cuenca_clip if v == 1][0]
         gdf_cuenca_clip = gpd.GeoDataFrame(geometry=[cuenca_geom_clip], crs=src_global.crs)
+
+        # --- AÑADIDO: Recorte de ríos si la cuenca no es válida (solo por seguridad) ---
+        # Aseguramos que gdf_streams_full tenga un CRS antes de clip
+        if gdf_streams_full.crs is None:
+            gdf_streams_full.crs = src_global.crs # Asignar el CRS si no lo tiene
+        
+        # Asegurar que gdf_cuenca_clip tenga un CRS válido para el clip
+        if gdf_cuenca_clip.crs is None:
+            gdf_cuenca_clip.crs = src_global.crs # Asignar el CRS si no lo tiene
+        
+        try:
+            gdf_streams_recortado = gpd.clip(gdf_streams_full, gdf_cuenca_clip)
+        except Exception as clip_e:
+            results['message'] = f"Advertencia: Falló el recorte de los ríos a la cuenca: {clip_e}. Los resultados de ríos podrían estar incompletos."
+            gdf_streams_recortado = gpd.GeoDataFrame(geometry=[], crs=src_global.crs) # Crear un GeoDataFrame vacío
+        # --- FIN AÑADIDO ---
+        
         gdf_streams_recortado = gpd.clip(gdf_streams_full, gdf_cuenca_clip)
         dem_cuenca_recortada = grid_para_plot.view(conditioned_dem, nodata=np.nan)
         fig37, axes = plt.subplots(1, 2, figsize=(18, 9))
@@ -334,10 +377,16 @@ def realizar_analisis_hidrologico_directo(dem_url, outlet_coords_wgs84, umbral_r
 
     except Exception as e:
         # Aseguramos que 'results' sea un diccionario antes de intentar asignarle un mensaje
+        # Esto ya lo tenías, pero es importante reiterarlo.
         if not isinstance(results, dict):
-            results = {"success": False} # Re-inicializar si no es un dict
+            results = {"success": False}
         
-        results['message'] = f"Error en el análisis hidrológico directo: {e}\n{traceback.format_exc()}"
+        # Añadir un mensaje más informativo para el usuario
+        error_message = f"Error en el análisis hidrológico directo: {e}"
+        if "IndexError: list index out of range" in traceback.format_exc():
+            error_message += "\nSugerencia: El punto de desagüe o el umbral seleccionado no permitió delinear una cuenca válida o extraer sus geometrías. Intente un punto diferente o ajuste el umbral."
+        
+        results['message'] = f"{error_message}\n{traceback.format_exc()}"
         results['success'] = False
         print(f"ERROR: realizar_analisis_hidrologico_directo - Error general capturado: {e}")
         print(traceback.format_exc())
@@ -366,8 +415,8 @@ def procesar_datos_cuenca(basin_geojson_str):
         print("LOG: Descargando/obteniendo ruta de Hojas MTN25...")
         local_zip_path = get_local_path_from_url(HOJAS_MTN25_PATH)
         if not local_zip_path:
-            st.error("No se pudo obtener el archivo de hojas del MTN25 desde el caché.")
-            return None
+            #st.error("No se pudo obtener el archivo de hojas del MTN25 desde el caché.") # <--- ELIMINAR
+            return {"error": "No se pudo obtener el archivo de hojas del MTN25 desde el caché."} # <--- CAMBIO
         print("LOG: Leyendo GDF de Hojas...")
         hojas_gdf = gpd.read_file(local_zip_path)
         
@@ -401,16 +450,16 @@ def procesar_datos_cuenca(basin_geojson_str):
             
         except rasterio.errors.RasterioIOError as e:
             if "HTTP response code: 404" in str(e):
-                st.error(f"¡Error crítico! El MDT25 nacional no se encontró en la URL especificada para la Pestaña 2: `{DEM_NACIONAL_PATH}`. Por favor, verifica la URL o la existencia del archivo en tu bucket de Cloudflare R2 (¡asegúrate de que el nombre del archivo es exactamente el mismo, incluyendo mayúsculas y minúsculas!).")
+                # st.error(f"¡Error crítico! El MDT25 nacional no se encontró...") # <--- ELIMINAR
                 print(f"ERROR RASTERIO 404: {e}")
-                return None
+                return {"error": f"¡Error crítico! El MDT25 nacional no se encontró en la URL especificada para la Pestaña 2: `{DEM_NACIONAL_PATH}`. Por favor, verifica la URL o la existencia del archivo en tu bucket de Cloudflare R2 (¡asegúrate de que el nombre del archivo es exactamente el mismo, incluyendo mayúsculas y minúsculas!)."} # <--- CAMBIO
             else:
                 raise e # Si es otro tipo de error de Rasterio, relanzarlo para que el except general lo capture.
         # --- FIN DEL AÑADIDO ---
         
         if dem_bytes is None: # Esta comprobación es más relevante ahora
-            st.error("La generación del DEM recortado falló o no se obtuvo ningún dato.")
-            return None
+            # st.error("La generación del DEM recortado falló (dem_bytes is None).") # <--- ELIMINAR
+            return {"error": "La generación del DEM recortado falló o no se obtuvo ningún dato."} # <--- CAMBIO
         
         print("LOG: Exportando GDF a ZIP...")
         shp_zip_bytes = export_gdf_to_zip(buffer_gdf, "contorno_cuenca_buffer")
@@ -418,10 +467,10 @@ def procesar_datos_cuenca(basin_geojson_str):
         return { "cuenca_gdf": cuenca_gdf, "buffer_gdf": buffer_gdf.to_crs("EPSG:4326"), "hojas": hojas, "dem_bytes": dem_bytes, "dem_array": dem_recortado, "shp_zip_bytes": shp_zip_bytes }
 
     except Exception as e:
-        st.error(f"Ha ocurrido un error inesperado durante el procesamiento de la cuenca: {e}")
-        st.exception(e)
+        # st.error(f"Ha ocurrido un error inesperado durante el procesamiento de la cuenca: {e}")
+        # st.exception(e)
         print(f"ERROR TRACEBACK en procesar_datos_cuenca: {traceback.format_exc()}")
-        return None
+        return {"error": f"Ha ocurrido un error inesperado durante el procesamiento de la cuenca: {e}\n{traceback.format_exc()}"} # <--- CAMBIO
 
 @st.cache_data(show_spinner="Procesando el polígono dibujado...")
 def procesar_datos_poligono(polygon_geojson_str):
@@ -433,8 +482,9 @@ def procesar_datos_poligono(polygon_geojson_str):
         
         local_zip_path = get_local_path_from_url(HOJAS_MTN25_PATH)
         if not local_zip_path:
-            st.error("No se pudo descargar el archivo de hojas del MTN25 desde la nube.")
-            return None
+            # st.error("No se pudo descargar el archivo de hojas del MTN25 desde la nube.") # <--- ELIMINAR
+            return {"error": "No se pudo descargar el archivo de hojas del MTN25 desde la nube."} # <--- CAMBIO
+
         hojas_gdf = gpd.read_file(local_zip_path)
         
         geom_para_interseccion = poly_gdf.to_crs(hojas_gdf.crs)
@@ -458,25 +508,25 @@ def procesar_datos_poligono(polygon_geojson_str):
                     dem_bytes = buffer.read()
         except rasterio.errors.RasterioIOError as e:
             if "HTTP response code: 404" in str(e):
-                st.error(f"¡Error crítico! El MDT25 nacional no se encontró en la URL especificada para la Pestaña 2: `{DEM_NACIONAL_PATH}`. Por favor, verifica la URL o la existencia del archivo en tu bucket de Cloudflare R2 (¡asegúrate de que el nombre del archivo es exactamente el mismo, incluyendo mayúsculas y minúsculas!).")
+                # st.error(f"¡Error crítico! El MDT25 nacional no se encontró...") # <--- ELIMINAR
                 print(f"ERROR RASTERIO 404: {e}")
-                return {"error": f"MDT25 no encontrado. Verifica la URL: {DEM_NACIONAL_PATH}"} # Devolver un error específico
+                return {"error": f"¡Error crítico! El MDT25 nacional no se encontró en la URL especificada para la Pestaña 2: `{DEM_NACIONAL_PATH}`. Por favor, verifica la URL o la existencia del archivo en tu bucket de Cloudflare R2 (¡asegúrate de que el nombre del archivo es exactamente el mismo, incluyendo mayúsculas y minúsculas!)."} # <--- CAMBIO
             else:
                 raise e
         # --- FIN DEL AÑADIDO ---
 
         if dem_bytes is None:
-            st.error("La generación del DEM recortado para el polígono falló o no se obtuvo ningún dato.")
-            return None
+            # st.error("La generación del DEM recortado para el polígono falló.") # <--- ELIMINAR
+            return {"error": "La generación del DEM recortado para el polígono falló."} # <--- CAMBIO
             
         shp_zip_bytes = export_gdf_to_zip(poly_gdf, "contorno_poligono_manual")
         return { "poligono_gdf": poly_gdf, "hojas": hojas, "dem_bytes": dem_bytes, "dem_array": dem_recortado, "shp_zip_bytes": shp_zip_bytes, "area_km2": area_km2 }
 
     except Exception as e:
-        st.error(f"Ha ocurrido un error inesperado durante el procesamiento del polígono: {e}")
-        st.exception(e)
+        # st.error("Ha ocurrido un error inesperado durante el procesamiento del polígono.") # <--- ELIMINAR
+        # st.exception(e) # <--- ELIMINAR
         print(traceback.format_exc())
-        return None
+        return {"error": f"Ha ocurrido un error inesperado durante el procesamiento del polígono: {e}\n{traceback.format_exc()}"} # <--- CAMBIO
 
 def export_gdf_to_zip(gdf, filename_base):
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -512,36 +562,46 @@ def precalcular_acumulacion(_dem_bytes):
         flwdir = pyflwdir.from_dem(data=dem_array, transform=transform, nodata=np.nan)
         acc = flwdir.upstream_area(unit='cell')
         acc_limpio = np.nan_to_num(acc, nan=0.0)
-        acc_limpio = np.where(acc_limpio < 0, 0, acc_limpio)
+        acc_limpio = np.where(acc_limpio < 0, 0, acc_limpio) # Eliminar negativos por si acaso
 
-        # Nuevo: Usar una transformación de potencia (corrección gamma) para aumentar el contraste
-        # y hacer los píxeles de los cauces más evidentes para la selección.
-        # Un exponente pequeño (ej. 0.2) realza los valores altos de acumulación,
-        # haciendo que los píxeles individuales de la red fluvial sean más nítidos.
-        power_factor = 0.2 # Valor recomendado para realce de contraste. Ajustar si es necesario (0.1 para más, 0.3 para menos).
-        scaled_acc_for_viz = acc_limpio ** power_factor # <-- Nueva línea para la transformación de potencia
+        # # Nuevo: Usar una transformación de potencia (corrección gamma) para aumentar el contraste
+        # # y hacer los píxeles de los cauces más evidentes para la selección.
+        # # Un exponente pequeño (ej. 0.2) realza los valores altos de acumulación,
+        # # haciendo que los píxeles individuales de la red fluvial sean más nítidos.
+        # power_factor = 0.2 # Valor recomendado para realce de contraste. Ajustar si es necesario (0.1 para más, 0.3 para menos).
+        # scaled_acc_for_viz = acc_limpio ** power_factor # <-- Nueva línea para la transformación de potencia
+        # 
+        # min_val, max_val = np.nanmin(scaled_acc_for_viz), np.nanmax(scaled_acc_for_viz) # <-- Usar la nueva variable aquí
+        # 
+        # if max_val == min_val:
+        #     # Evitar división por cero si el ráster es plano
+        #     img_acc = np.zeros_like(scaled_acc_for_viz, dtype=np.uint8) # <-- Usar la nueva variable aquí
+        # else:
+        #     # Normalizar los valores a un rango de 0-255 para crear una imagen en escala de grises
+        #     scaled_acc_nan_as_zero = np.nan_to_num(scaled_acc_for_viz, nan=min_val) # <-- Usar la nueva variable aquí
+        #     img_acc = (255 * (scaled_acc_nan_as_zero - min_val) / (max_val - min_val)).astype(np.uint8)
+        # --- INICIO DEL CAMBIO SOLICITADO: Usar transformación logarítmica ---
+        # Aseguramos que acc_limpio exista y sea numérico antes de aplicar log1p
+
+        log_acc = np.log1p(acc_limpio) # Aplica log(1 + x) para manejar el cero y realzar pequeños valores
         
-        min_val, max_val = np.nanmin(scaled_acc_for_viz), np.nanmax(scaled_acc_for_viz) # <-- Usar la nueva variable aquí
+        min_val, max_val = np.nanmin(log_acc), np.nanmax(log_acc)
         
         if max_val == min_val:
-            # Evitar división por cero si el ráster es plano
-            img_acc = np.zeros_like(scaled_acc_for_viz, dtype=np.uint8) # <-- Usar la nueva variable aquí
+            # Evitar división por cero si el ráster es plano (todos los valores son iguales)
+            img_acc = np.zeros_like(log_acc, dtype=np.uint8)
         else:
             # Normalizar los valores a un rango de 0-255 para crear una imagen en escala de grises
-            scaled_acc_nan_as_zero = np.nan_to_num(scaled_acc_for_viz, nan=min_val) # <-- Usar la nueva variable aquí
-            img_acc = (255 * (scaled_acc_nan_as_zero - min_val) / (max_val - min_val)).astype(np.uint8)
-        # log_acc = np.log1p(acc_limpio)
-        # min_val, max_val = np.nanmin(log_acc), np.nanmax(log_acc)
-        # if max_val == min_val:
-        #     img_acc = np.zeros_like(log_acc, dtype=np.uint8)
-        # else:
-        #     log_acc_nan_as_zero = np.nan_to_num(log_acc, nan=min_val)
-        #     img_acc = (255 * (log_acc_nan_as_zero - min_val) / (max_val - min_val)).astype(np.uint8)
+            # np.nan_to_num aquí es redundante si acc_limpio ya está limpio, pero lo mantenemos por seguridad.
+            log_acc_nan_as_zero = np.nan_to_num(log_acc, nan=min_val) 
+            img_acc = (255 * (log_acc_nan_as_zero - min_val) / (max_val - min_val)).astype(np.uint8)
+        # --- FIN DEL CAMBIO SOLICITADO ---
+
         return img_acc
     except Exception as e:
-        st.error(f"Error en el pre-cálculo con pyflwdir: {e}")
-        st.code(traceback.format_exc())
-        return None
+        # st.error(f"Error en el pre-cálculo con pyflwdir: {e}") # <--- ELIMINAR
+        # st.code(traceback.format_exc()) # <--- ELIMINAR
+        return {"error": f"Error en el pre-cálculo con pyflwdir: {e}\n{traceback.format_exc()}"} # <--- CAMBIO
 
 # ==============================================================================
 # SECCIÓN 5: FUNCIÓN PRINCIPAL DEL FRONTEND (RENDERIZADO DE LA PESTAÑA)
@@ -559,45 +619,63 @@ def render_dem25_tab():
 
     st.info("Esta herramienta identifica las hojas del MTN25 y genera un DEM recortado para la cuenca (con buffer de 5km) o para un área dibujada manualmente.")
 
+    # **Mantenemos este chequeo inicial SOLO para el caso de que NO haya cuenca calculada en Pestaña 1**
+    # Esto evitará la mayoría de los "doble click" si el usuario ya ha calculado en Pestaña 1
     if not st.session_state.get('basin_geojson'):
-        st.warning("⬅️ Por favor, primero calcule una cuenca en la Pestaña 1.")
-        st.stop()
+        st.warning("⬅️ Por favor, primero calcule una cuenca en la Pestaña 1 para habilitar esta funcionalidad.")
+        return # Salir si no hay cuenca para procesar.
 
+    # El botón siempre estará visible si hay una cuenca de la Pestaña 1.
     if st.button("🗺️ Analizar Hojas y DEM para la Cuenca Actual", use_container_width=True):
         try:
             temp_cuenca_gdf = gpd.read_file(st.session_state.basin_geojson).set_crs("EPSG:4326")
             area_km2 = temp_cuenca_gdf.to_crs("EPSG:25830").area.sum() / 1_000_000
             if area_km2 > AREA_PROCESSING_LIMIT_KM2:
                 st.error(f"El área de la cuenca calculada ({area_km2:,.0f} km²) es demasiado grande. Límite: {AREA_PROCESSING_LIMIT_KM2:,.0f} km².")
-                st.stop() 
+                st.session_state.show_dem25_content = False # Importante: resetear si hay error
+                # No necesitamos st.stop() aquí, dejaremos que el script continúe y muestre el error.
+                # El return del final de render_dem25_tab se encargará si show_dem25_content es False.
+                return 
         except Exception as e:
             st.error(f"No se pudo verificar el área de la cuenca: {e}")
-            st.stop()
+            st.session_state.show_dem25_content = False
+            return
 
         with st.spinner("Procesando recorte del DEM... Esta operación puede tardar varios segundos. Por favor, espere."):
             results = procesar_datos_cuenca(st.session_state.basin_geojson)
-        
-        if results:
+
+        if results and results.get("error"):
+            st.error(results["error"])
+            st.session_state.show_dem25_content = False # Si hay un error, no mostramos el contenido
+            # No se necesita st.stop() o st.rerun() aquí, el error se mostrará y el script continuará
+            # hasta el final del render_dem25_tab donde la condición de show_dem25_content=False actuará.
+        elif results: # Éxito en procesar_datos_cuenca
             st.session_state.cuenca_results = results
             st.session_state.processed_basin_id = st.session_state.basin_geojson
-            # precalcular_acumulacion ahora recibe los bytes del DEM recortado, no la URL del DEM nacional
-            st.session_state.precalculated_acc = precalcular_acumulacion(results['dem_bytes']) 
+            
+            precalc_acc_result = precalcular_acumulacion(results['dem_bytes'])
+            if isinstance(precalc_acc_result, dict) and "error" in precalc_acc_result:
+                st.error(f"Error en el pre-cálculo de acumulación para la visualización: {precalc_acc_result['error']}")
+                st.session_state.precalculated_acc = None
+            else:
+                st.session_state.precalculated_acc = precalc_acc_result
+            
             st.session_state.pop('poligono_results', None)
             st.session_state.pop('user_drawn_geojson', None)
             st.session_state.pop('polygon_error_message', None)
             st.session_state.pop('hidro_results_externo', None)
-            st.session_state.show_dem25_content = True
-            st.rerun()
-        else:
+            st.session_state.show_dem25_content = True # Marcar como listo para mostrar el contenido
+            # ELIMINAR st.rerun() AQUÍ. Permitimos que el script continúe para dibujar de inmediato.
+        else: # Un caso genérico de fallo que no devolvió un diccionario de error específico
             st.error("No se pudo procesar la cuenca. La operación falló o superó el tiempo de espera. Revisa los logs del servidor para más detalles.")
             st.session_state.show_dem25_content = False
 
-    # if not st.session_state.get('show_dem25_content') or not st.session_state.get('cuenca_results'):
-    #     st.stop()
-
+    # AHORA, esta condición de guardia se aplica al resto del contenido de la pestaña.
+    # Se ejecutará DESPUÉS de que el botón haya tenido la oportunidad de actualizar el estado.
     if not st.session_state.get('show_dem25_content') or not st.session_state.get('cuenca_results'):
-        st.info("Seleccione un punto en el mapa y haga clic en 'Analizar Hojas y DEM para la Cuenca Actual' para empezar.") # <-- Nueva línea
-        return # <-- Reemplaza st.stop()
+        if st.session_state.get('basin_geojson'): # Si hay cuenca pero aún no se ha procesado con el botón
+             st.info("Haga clic en 'Analizar Hojas y DEM para la Cuenca Actual' para empezar.")
+        return # No renderizar el resto de la pestaña si no está lista
 
     
     st.subheader("Mapa de Situación")
@@ -627,12 +705,20 @@ def render_dem25_tab():
         if c1.button("Iniciar / Reiniciar Dibujo", use_container_width=True): 
             st.session_state.drawing_mode_active = True; st.session_state.pop('user_drawn_geojson', None); st.session_state.pop('poligono_results', None); st.session_state.pop('polygon_error_message', None); st.rerun()
         if c2.button("Cancelar Dibujo", use_container_width=True): st.session_state.drawing_mode_active = False; st.rerun()
+
         if st.session_state.get('user_drawn_geojson'):
             if c3.button("▶️ Analizar Polígono Dibujado", use_container_width=True):
                 results = procesar_datos_poligono(st.session_state.user_drawn_geojson)
-                if "error" in results: st.session_state.polygon_error_message = results["error"]; st.session_state.pop('poligono_results', None)
-                else: st.session_state.poligono_results = results; st.session_state.pop('polygon_error_message', None)
+                # --- CAMBIO AQUÍ: Manejo del error devuelto ---
+                if results and "error" in results:
+                    st.session_state.polygon_error_message = results["error"]
+                    st.session_state.pop('poligono_results', None)
+                else:
+                    st.session_state.poligono_results = results
+                    st.session_state.pop('polygon_error_message', None)
+                # --- FIN CAMBIO ---
                 st.rerun()
+                
 
     if st.session_state.get('polygon_error_message'):
         st.markdown(f"<p style='font-size: 20px; color: tomato; font-weight: bold;'>⚠️ {st.session_state.get('polygon_error_message')}</p>", unsafe_allow_html=True)

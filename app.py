@@ -2,6 +2,7 @@
 
 import streamlit as st
 # --- Interfaz de Usuario de Streamlit ---
+import traceback # <--- Añadir esta importación aquí para el error de traceback
 st.set_page_config(layout="wide", page_title="Caumax con GIS hidrológico")
 import threading
 import time
@@ -47,6 +48,8 @@ from dem25_tab import render_dem25_tab
 # from tabs.dem25_tab import render_dem25_tab # (línea nueva)
 from perfil_terreno_tab import render_perfil_terreno_tab
 # from tabs.perfil_terreno_tab import render_perfil_terreno_tab # (línea nueva)
+
+
 
 # --- Configuración de CRS ---
 crs_utm30n = CRS("EPSG:25830")
@@ -96,6 +99,7 @@ def create_all_download_zips(basin_calculator, outlet_coords):
     with tempfile.TemporaryDirectory() as tmpdir:
         basin_shp_path = os.path.join(tmpdir, "cuenca_mask.shp")
         if not basin_calculator.export_basin_to_shapefile(basin_shp_path):
+            print("WARNING: Falló la exportación de la cuenca a shapefile.") # <--- CAMBIO
             return None, None, None, None
         basin_zip_io = io.BytesIO()
         with zipfile.ZipFile(basin_zip_io, 'w', zipfile.ZIP_DEFLATED) as zf:
@@ -119,7 +123,9 @@ def create_all_download_zips(basin_calculator, outlet_coords):
                         for file in files:
                             if file.startswith("rios_recortados"): zf.write(os.path.join(root, file), arcname=file.replace("rios_recortados", "rios_cuenca"))
             rivers_zip_io.seek(0)
-        except Exception: pass
+        except Exception as e:
+            print(f"ERROR: No se pudieron recortar los ríos: {e}") # <--- CAMBIO
+
         dem_zip_io = None
         try:
             # --- ¡CORRECCIÓN AQUÍ! ---
@@ -133,7 +139,9 @@ def create_all_download_zips(basin_calculator, outlet_coords):
                 with zipfile.ZipFile(dem_zip_io, 'w', zipfile.ZIP_DEFLATED) as zf:
                     zf.write(dem_tif_path_out, arcname="mdt_cuenca.tif")
                 dem_zip_io.seek(0)
-        except Exception as e: st.error(f"Error técnico al recortar el DEM: {e}")
+        except Exception as e:
+            # st.error(f"Error técnico al recortar el DEM: {e}") # <--- ELIMINAR
+            print(f"ERROR: Error técnico al recortar el DEM: {e}") # <--- CAMBIO
         # ... (el resto de la función se queda igual)
         point_zip_io = None
         try:
@@ -154,7 +162,9 @@ def create_all_download_zips(basin_calculator, outlet_coords):
                         for file in files:
                             if file.startswith("punto_desague"): zf.write(os.path.join(root, file), arcname=file)
             point_zip_io.seek(0)
-        except Exception as e: st.warning(f"No se pudo crear el shapefile del punto de desagüe: {e}")
+        except Exception as e:
+            # st.warning(f"No se pudo crear el shapefile del punto de desagüe: {e}") # <--- ELIMINAR
+            print(f"WARNING: No se pudo crear el shapefile del punto de desagüe: {e}") # <--- CAMBIO
         return basin_zip_io, rivers_zip_io, dem_zip_io, point_zip_io
 
 # --- INICIO: SECCIÓN ELIMINADA ---
