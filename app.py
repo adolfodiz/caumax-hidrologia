@@ -2,7 +2,6 @@
 
 import streamlit as st
 # --- Interfaz de Usuario de Streamlit ---
-import traceback # <--- Añadir esta importación aquí para el error de traceback
 st.set_page_config(layout="wide", page_title="Caumax con GIS hidrológico")
 import threading
 import time
@@ -48,8 +47,6 @@ from dem25_tab import render_dem25_tab
 # from tabs.dem25_tab import render_dem25_tab # (línea nueva)
 from perfil_terreno_tab import render_perfil_terreno_tab
 # from tabs.perfil_terreno_tab import render_perfil_terreno_tab # (línea nueva)
-
-
 
 # --- Configuración de CRS ---
 crs_utm30n = CRS("EPSG:25830")
@@ -99,7 +96,6 @@ def create_all_download_zips(basin_calculator, outlet_coords):
     with tempfile.TemporaryDirectory() as tmpdir:
         basin_shp_path = os.path.join(tmpdir, "cuenca_mask.shp")
         if not basin_calculator.export_basin_to_shapefile(basin_shp_path):
-            print("WARNING: Falló la exportación de la cuenca a shapefile.") # <--- CAMBIO
             return None, None, None, None
         basin_zip_io = io.BytesIO()
         with zipfile.ZipFile(basin_zip_io, 'w', zipfile.ZIP_DEFLATED) as zf:
@@ -123,9 +119,7 @@ def create_all_download_zips(basin_calculator, outlet_coords):
                         for file in files:
                             if file.startswith("rios_recortados"): zf.write(os.path.join(root, file), arcname=file.replace("rios_recortados", "rios_cuenca"))
             rivers_zip_io.seek(0)
-        except Exception as e:
-            print(f"ERROR: No se pudieron recortar los ríos: {e}") # <--- CAMBIO
-
+        except Exception: pass
         dem_zip_io = None
         try:
             # --- ¡CORRECCIÓN AQUÍ! ---
@@ -139,9 +133,7 @@ def create_all_download_zips(basin_calculator, outlet_coords):
                 with zipfile.ZipFile(dem_zip_io, 'w', zipfile.ZIP_DEFLATED) as zf:
                     zf.write(dem_tif_path_out, arcname="mdt_cuenca.tif")
                 dem_zip_io.seek(0)
-        except Exception as e:
-            # st.error(f"Error técnico al recortar el DEM: {e}") # <--- ELIMINAR
-            print(f"ERROR: Error técnico al recortar el DEM: {e}") # <--- CAMBIO
+        except Exception as e: st.error(f"Error técnico al recortar el DEM: {e}")
         # ... (el resto de la función se queda igual)
         point_zip_io = None
         try:
@@ -162,9 +154,7 @@ def create_all_download_zips(basin_calculator, outlet_coords):
                         for file in files:
                             if file.startswith("punto_desague"): zf.write(os.path.join(root, file), arcname=file)
             point_zip_io.seek(0)
-        except Exception as e:
-            # st.warning(f"No se pudo crear el shapefile del punto de desagüe: {e}") # <--- ELIMINAR
-            print(f"WARNING: No se pudo crear el shapefile del punto de desagüe: {e}") # <--- CAMBIO
+        except Exception as e: st.warning(f"No se pudo crear el shapefile del punto de desagüe: {e}")
         return basin_zip_io, rivers_zip_io, dem_zip_io, point_zip_io
 
 # --- INICIO: SECCIÓN ELIMINADA ---
@@ -254,11 +244,10 @@ def create_river_profile_plot(rivers_shp_path, dem_tif_path, outlet_coords_utm):
         rivers_ds, dem_ds = None, None
         return fig, main_channel_geom, profile_data
     except Exception as e:
-        # st.error(f"Se produjo un error inesperado al generar el perfil del río: {e}") # COMENTAR O BORRAR
-        # import traceback # COMENTAR O BORRAR
-        # traceback.print_exc() # COMENTAR O BORRAR
-        print(f"ERROR: Se produjo un error inesperado al generar el perfil del río: {e}\n{traceback.format_exc()}") # <--- Añadir esto para logs si quieres rastrear
-        return None, None, None # Asegurar que siempre devuelve los valores esperados
+        st.error(f"Se produjo un error inesperado al generar el perfil del río: {e}")
+        import traceback
+        traceback.print_exc()
+        return None, None, None
 
 def create_profile_csv(profile_data):
     if not profile_data or 'distances_m' not in profile_data or 'elevations_m' not in profile_data: return None
@@ -391,9 +380,6 @@ with st.sidebar:
     # st.checkbox("Cauce Principal Calculado", value=True, key="show_main_channel", disabled=not st.session_state.main_channel_geojson)
     # --- FIN: LÍNEA ELIMINADA ---
     st.header("Información de la Región")
-    # --- INICIO DEL CAMBIO ---
-    # Asegúrate de que region_info siempre esté definida, incluso si es un diccionario vacío.
-    region_info = {} # Inicializar region_info aquí
     if st.session_state.results and st.session_state.results.get('region_info'):
         region_info = st.session_state.results['region_info']
         
@@ -412,8 +398,6 @@ with st.sidebar:
     else:
         st.markdown("Seleccione un punto y calcule para ver la información.")
 
-    # --- FIN DEL CAMBIO ---
-    
 st.title("CAUMAX y Herramientas Hidrológicas GIS")
 st.header("Mapa Interactivo")
 st.info("💡 **Consejo:** Para obtener los mejores resultados, haga clic directamente sobre o muy cerca de los cauces azules (Red Fluvial) superpuestos en el mapa.")
