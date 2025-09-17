@@ -159,88 +159,95 @@ def export_gdf_to_zip(gdf, filename_base):
 
 @st.cache_data(show_spinner="Pre-calculando referencia de cauces (pyflwdir)...")
 # def precalcular_acumulacion(_dem_bytes):
+#     """
+#     Calcula la acumulación de flujo usando pyflwdir y la prepara para visualización.
+#     """
 #     try:
-#         memfile = rasterio.io.MemoryFile(_dem_bytes)
+#         # 1. Abrir el DEM en memoria
+#         with rasterio.io.MemoryFile(_dem_bytes) as memfile:
+#             with memfile.open() as src:
+#                 dem_array = src.read(1).astype(np.float32)
+#                 nodata = src.meta.get('nodata')
+#                 if nodata is not None:
+#                     dem_array[dem_array == nodata] = np.nan
+#                 transform = src.transform
 # 
-#         with memfile.open() as src:
-#             dem_array = src.read(1).astype(np.float32)
-#             nodata = src.meta.get('nodata')
-#             if nodata is not None: dem_array[dem_array == nodata] = np.nan
-#             transform = src.transform
-#         
+#         # 2. Calcular las direcciones de flujo y la acumulación con pyflwdir
 #         flwdir = pyflwdir.from_dem(data=dem_array, transform=transform, nodata=np.nan)
 #         acc = flwdir.upstream_area(unit='cell')
+#         
+#         
+#         # --- Generar la imagen binaria para acumulación de flujo ---
+#         # Los píxeles con acumulación mayor que el umbral serán 1 (blanco)
+#         # Los demás serán 0 (negro)
+#         umbral_acumulacion = 1000 # <-- Cambia este valor al número de celdas que necesites
+#         acc_binary = (acc > umbral_acumulacion).astype(np.uint8)
+#         
+#         # Folium requiere que los valores del ráster estén entre 0 y 1 para mapear el color,
+#         # así que aseguramos que los True se conviertan a 1 y los False a 0.
+#         
+#         
+#         
+#         # 3. Procesar el array de acumulación para una mejor visualización
+#         # Se usa una transformación logarítmica para resaltar los cauces principales
+#         # log_acc = np.log1p(acc)
+#         # --- INICIO DE LA SOLUCIÓN DEFINITIVA ---
+#         # La documentación confirma que 'acc' puede contener np.nan.
+#         # Los reemplazamos por 0 ANTES de cualquier cálculo matemático.
 #         acc_limpio = np.nan_to_num(acc, nan=0.0)
+# 
+#         # Por seguridad, también nos aseguramos de que no haya negativos.
 #         acc_limpio = np.where(acc_limpio < 0, 0, acc_limpio)
 #         
-#         power_factor = 0.2
-#         scaled_acc_for_viz = acc_limpio ** power_factor
-#         
-#         min_val, max_val = np.nanmin(scaled_acc_for_viz), np.nanmax(scaled_acc_for_viz)
+#         # Ahora, calculamos el logaritmo sobre el array limpio y seguro.
+#         log_acc = np.log1p(acc_limpio)
+#         # --- FIN DE LA SOLUCIÓN DEFINITIVA ---
+# 
+#         min_val, max_val = np.nanmin(log_acc), np.nanmax(log_acc)
 #         
 #         if max_val == min_val:
-#             img_acc = np.zeros_like(scaled_acc_for_viz, dtype=np.uint8)
+#             # Evitar división por cero si el ráster es plano
+#             img_acc = np.zeros_like(log_acc, dtype=np.uint8)
 #         else:
-#             scaled_acc_nan_as_zero = np.nan_to_num(scaled_acc_for_viz, nan=min_val)
-#             img_acc = (255 * (scaled_acc_nan_as_zero - min_val) / (max_val - min_val)).astype(np.uint8)
+#             # Normalizar los valores a un rango de 0-255 para crear una imagen en escala de grises
+#             log_acc_nan_as_zero = np.nan_to_num(log_acc, nan=min_val)
+#             img_acc = (255 * (log_acc_nan_as_zero - min_val) / (max_val - min_val)).astype(np.uint8)
 #         
 #         return img_acc
+# 
 #     except Exception as e:
 #         st.error(f"Error en el pre-cálculo con pyflwdir: {e}")
-#         st.code(traceback.format_exc())
-#         return 
-
+#         import traceback
+#         st.code(traceback.format_exc()) # Muestra más detalles del error
+#         return None
 def precalcular_acumulacion(_dem_bytes):
-    """
-    Calcula la acumulación de flujo usando pyflwdir y la prepara para visualización.
-    """
+    # --- PROCESO EXISTENTE ---
     try:
-        # 1. Abrir el DEM en memoria
-        with rasterio.io.MemoryFile(_dem_bytes) as memfile:
-            with memfile.open() as src:
-                dem_array = src.read(1).astype(np.float32)
-                nodata = src.meta.get('nodata')
-                if nodata is not None:
-                    dem_array[dem_array == nodata] = np.nan
-                transform = src.transform
-
-        # 2. Calcular las direcciones de flujo y la acumulación con pyflwdir
-        flwdir = pyflwdir.from_dem(data=dem_array, transform=transform, nodata=np.nan)
+        grid = Grid.from_dem(_dem_bytes, data_name="dem", cellsize=25.0)
+        dem = grid.dem
+        dirmap = (64, 128, 1, 2, 4, 8, 16, 32)
+        flwdir = pyflwdir.from_width(
+            grid.dem, 25.0,
+            ftype="d8",
+            latlon=False,
+            # enforce_edgeflow=False # Opción desactivada para evitar problemas en bordes de DEM
+        )
         acc = flwdir.upstream_area(unit='cell')
 
-        # 3. Procesar el array de acumulación para una mejor visualización
-        # Se usa una transformación logarítmica para resaltar los cauces principales
-        # log_acc = np.log1p(acc)
-        # --- INICIO DE LA SOLUCIÓN DEFINITIVA ---
-        # La documentación confirma que 'acc' puede contener np.nan.
-        # Los reemplazamos por 0 ANTES de cualquier cálculo matemático.
-        acc_limpio = np.nan_to_num(acc, nan=0.0)
+        # --- LÓGICA AGREGADA ---
+        # 1. Definir el umbral de acumulación. Cambia este valor según tu necesidad.
+        umbral_acumulacion = 1000 
+        
+        # 2. Crear la matriz binaria para los píxeles (0 o 1)
+        # Convertimos a np.uint8 para asegurar los tipos de datos correctos para la visualización
+        acc_binary = (acc > umbral_acumulacion).astype(np.uint8)
 
-        # Por seguridad, también nos aseguramos de que no haya negativos.
-        acc_limpio = np.where(acc_limpio < 0, 0, acc_limpio)
-        
-        # Ahora, calculamos el logaritmo sobre el array limpio y seguro.
-        log_acc = np.log1p(acc_limpio)
-        # --- FIN DE LA SOLUCIÓN DEFINITIVA ---
-
-        min_val, max_val = np.nanmin(log_acc), np.nanmax(log_acc)
-        
-        if max_val == min_val:
-            # Evitar división por cero si el ráster es plano
-            img_acc = np.zeros_like(log_acc, dtype=np.uint8)
-        else:
-            # Normalizar los valores a un rango de 0-255 para crear una imagen en escala de grises
-            log_acc_nan_as_zero = np.nan_to_num(log_acc, nan=min_val)
-            img_acc = (255 * (log_acc_nan_as_zero - min_val) / (max_val - min_val)).astype(np.uint8)
-        
-        return img_acc
+        # La función ahora devuelve una tupla con ambos objetos
+        return (flwdir, acc_binary)
 
     except Exception as e:
-        st.error(f"Error en el pre-cálculo con pyflwdir: {e}")
-        import traceback
-        st.code(traceback.format_exc()) # Muestra más detalles del error
-        return None
-
+        st.error(f"Error en el pre-cálculo de acumulación: {e}")
+        return None, None
 
 
 # ==============================================================================
@@ -548,7 +555,9 @@ def render_dem25_tab():
         if results:
             st.session_state.cuenca_results = results
             st.session_state.processed_basin_id = st.session_state.basin_geojson
-            st.session_state.precalculated_acc = precalcular_acumulacion(results['dem_bytes']) 
+            #.session_state.precalculated_acc = precalcular_acumulacion(results['dem_bytes'])
+            # Ahora precalcular_acumulacion devuelve la matriz binaria y el objeto flwdir
+            st.session_state.precalculated_acc, st.session_state.acc_binary_precalc = precalcular_acumulacion(results['dem_bytes'])
             st.session_state.pop('poligono_results', None)
             st.session_state.pop('user_drawn_geojson', None)
             st.session_state.pop('polygon_error_message', None)
@@ -581,8 +590,7 @@ def render_dem25_tab():
         Draw(export=True, filename='data.geojson', position='topleft', draw_options={'polyline': False, 'rectangle': False, 'circle': False, 'marker': False, 'circlemarker': False, 'polygon': {'shapeOptions': {'color': 'magenta', 'weight': 3, 'fillOpacity': 0.2}}}, edit_options={'edit': False}).add_to(m)
     
     folium.LayerControl().add_to(m)
-    map_output = st_folium(m, use_container_width=True, height=800, returned_objects=['all_drawings'])
-    
+    map_output = st_folium(m, key="situacion_map", use_container_width=True, height=800, returned_objects=['all_drawings'])
     # Procesar el dibujo cuando se complete
     if st.session_state.get("drawing_mode_active") and map_output.get("all_drawings"):
         st.session_state.user_drawn_geojson = json.dumps(map_output["all_drawings"][0]['geometry'])
@@ -667,15 +675,38 @@ def render_dem25_tab():
     if st.session_state.get('lat_wgs84') and st.session_state.get('lon_wgs84'):
         folium.Marker([st.session_state.lat_wgs84, st.session_state.lon_wgs84], popup="Punto de Interés (Pestaña 1)", icon=folium.Icon(color="red", icon="info-sign")).add_to(map_select)
 
-    if 'precalculated_acc' in st.session_state and st.session_state.precalculated_acc is not None:
-        acc_raster = st.session_state.precalculated_acc
-        bounds = buffer_gdf.total_bounds
-        img = Image.fromarray(acc_raster)
-        buffered = io.BytesIO()
-        img.save(buffered, format="PNG")
-        img_str = base64.b64encode(buffered.getvalue()).decode()
-        img_url = f"data:image/png;base64,{img_str}"
-        folium.raster_layers.ImageOverlay(image=img_url, bounds=[[bounds[1], bounds[0]], [bounds[3], bounds[2]]], opacity=0.6, name='Referencia de Cauces (Acumulación)').add_to(map_select)
+    # if 'precalculated_acc' in st.session_state and st.session_state.precalculated_acc is not None:
+    #     acc_raster = st.session_state.precalculated_acc
+    #     bounds = buffer_gdf.total_bounds
+    #     img = Image.fromarray(acc_raster)
+    #     buffered = io.BytesIO()
+    #     img.save(buffered, format="PNG")
+    #     img_str = base64.b64encode(buffered.getvalue()).decode()
+    #     img_url = f"data:image/png;base64,{img_str}"
+    #     folium.raster_layers.ImageOverlay(image=img_url, bounds=[[bounds[1], bounds[0]], [bounds[3], bounds[2]]], opacity=0.6, name='Referencia de Cauces (Acumulación)').add_to(map_select)
+
+    if 'acc_binary_precalc' in st.session_state and st.session_state.acc_binary_precalc is not None:
+        # Definimos los límites del DEM para la capa de imagen
+        dem_bounds = st.session_state.cuenca_results['dem_bounds']
+        bounds = [[dem_bounds.bottom, dem_bounds.left], [dem_bounds.top, dem_bounds.right]]
+    
+        # Creamos un colormap de blanco y negro
+        blanco_negro_cmap = colors.ListedColormap(['black', 'white'])
+    
+        # Superponemos la imagen binaria directamente desde el array de numpy
+        # La opción 'pixelated=True' evita la interpolación y suavizado
+        folium.raster_layers.ImageOverlay(
+            name="Referencia de Cauces (Acumulación)",
+            image=st.session_state.acc_binary_precalc,
+            bounds=bounds,
+            opacity=0.6, # Puedes ajustar la opacidad
+            interactive=True,
+            cross_origin=False,
+            zindex=1,
+            colormap=blanco_negro_cmap,
+            pixelated=True
+        ).add_to(map_select)
+
 
     if 'outlet_coords' in st.session_state and st.session_state.outlet_coords is not None:
         coords = st.session_state.outlet_coords
