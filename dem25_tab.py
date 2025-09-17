@@ -47,210 +47,7 @@ AREA_PROCESSING_LIMIT_KM2 = 50000 # Límite para evitar procesar cuencas gigante
 # --- ¡¡¡AHORA SÍ ESTÁ!!! ---
 
 # ==============================================================================
-# SECCIÓN 3: FUNCIONES AUXILIARES DE LA PESTAÑA
-# ==============================================================================
-
-@st.cache_data(show_spinner="Procesando la cuenca + buffer...")
-def procesar_datos_cuenca(basin_geojson_str):
-    try:
-        print("LOG: Iniciando procesar_datos_cuenca...")
-        
-        print("LOG: Descargando/obteniendo ruta de Hojas MTN25...")
-        local_zip_path = get_local_path_from_url(HOJAS_MTN25_PATH)
-        if not local_zip_path:
-            st.error("No se pudo obtener el archivo de hojas del MTN25 desde el caché.")
-            return None
-        print("LOG: Leyendo GDF de Hojas...")
-        hojas_gdf = gpd.read_file(local_zip_path)
-        
-        cuenca_gdf = gpd.read_file(basin_geojson_str).set_crs("EPSG:4326")
-        buffer_gdf = gpd.GeoDataFrame(geometry=cuenca_gdf.to_crs("EPSG:25830").buffer(BUFFER_METROS), crs="EPSG:25830")
-        
-        print("LOG: Realizando intersección espacial (sjoin)...")
-        geom_para_interseccion = buffer_gdf.to_crs(hojas_gdf.crs)
-        hojas = gpd.sjoin(hojas_gdf, geom_para_interseccion, how="inner", predicate="intersects").drop_duplicates(subset=['numero'])
-        
-        # --- ¡CRÍTICO! Abrimos el DEM Nacional (COG) directamente desde la URL con rasterio ---
-        print(f"LOG: Abriendo DEM Nacional (COG) directamente desde URL: {DEM_NACIONAL_PATH}...")
-        with rasterio.open(DEM_NACIONAL_PATH) as src:
-            geom_recorte_gdf = buffer_gdf.to_crs(src.crs)
-            print("LOG: Iniciando operación de recorte del DEM (rasterio.mask)...")
-      
-            dem_recortado, trans_recortado = mask(dataset=src, shapes=geom_recorte_gdf.geometry, crop=True, nodata=src.nodata or -32768)
-            print(f"DEBUG: generar_dem - Operación de recorte del DEM finalizada. Resolución de píxel: {trans_recortado[1]}x{abs(trans_recortado[5])}. Shape: {dem_recortado.shape}")
-            
-            meta = src.meta.copy(); 
-            meta.update({"driver": "GTiff", "height": dem_recortado.shape[1], "width": dem_recortado.shape[2], "transform": trans_recortado, "compress": "NONE"})            
-            
-            with io.BytesIO() as buffer:
-                with rasterio.open(buffer, 'w', **meta) as dst:
-                    dst.write(dem_recortado)
-                buffer.seek(0)
-                dem_bytes = buffer.read()
-        
-        if dem_bytes is None:
-            st.error("La generación del DEM recortado falló (dem_bytes is None).")
-            return None
-        
-        print("LOG: Exportando GDF a ZIP...")
-        shp_zip_bytes = export_gdf_to_zip(buffer_gdf, "contorno_cuenca_buffer")
-        print("LOG: procesar_datos_cuenca finalizado con éxito.")
-        return { "cuenca_gdf": cuenca_gdf, "buffer_gdf": buffer_gdf.to_crs("EPSG:4326"), "hojas": hojas, "dem_bytes": dem_bytes, "dem_array": dem_recortado, "shp_zip_bytes": shp_zip_bytes }
-
-    except Exception as e:
-        st.error("Ha ocurrido un error inesperado durante el procesamiento de la cuenca.")
-        st.exception(e)
-        print(f"ERROR TRACEBACK en procesar_datos_cuenca: {traceback.format_exc()}")
-        return None
-
-@st.cache_data(show_spinner="Procesando el polígono dibujado...")
-def procesar_datos_poligono(polygon_geojson_str):
-    try:
-        poly_gdf = gpd.read_file(polygon_geojson_str).set_crs("EPSG:4326")
-        area_km2 = poly_gdf.to_crs("EPSG:25830").area.iloc[0] / 1_000_000
-        if area_km2 > LIMITE_AREA_KM2:
-            return {"error": f"El área ({area_km2:,.0f} km²) supera los límites de {LIMITE_AREA_KM2:,.0f} km²."}
-        
-        local_zip_path = get_local_path_from_url(HOJAS_MTN25_PATH)
-        if not local_zip_path:
-            st.error("No se pudo descargar el archivo de hojas del MTN25 desde la nube.")
-            return None
-        hojas_gdf = gpd.read_file(local_zip_path)
-        
-        geom_para_interseccion = poly_gdf.to_crs(hojas_gdf.crs)
-        hojas = gpd.sjoin(hojas_gdf, geom_para_interseccion, how="inner", predicate="intersects").drop_duplicates(subset=['numero'])
-        
-        print(f"LOG: Abriendo DEM Nacional (COG) directamente desde URL: {DEM_NACIONAL_PATH} para polígono...")
-        with rasterio.open(DEM_NACIONAL_PATH) as src:
-            geom_recorte_gdf = poly_gdf.to_crs(src.crs)
-            dem_recortado, trans_recortado = mask(dataset=src, shapes=geom_recorte_gdf.geometry, crop=True, nodata=src.nodata or -32768)
-            meta = src.meta.copy()
-            meta.update({"driver": "GTiff", "height": dem_recortado.shape[1], "width": dem_recortado.shape[2], "transform": trans_recortado, "compress": "NONE"})
-            with io.BytesIO() as buffer:
-                with rasterio.open(buffer, 'w', **meta) as dst:
-                    dst.write(dem_recortado)
-                buffer.seek(0)
-                dem_bytes = buffer.read()
-
-        if dem_bytes is None:
-            st.error("La generación del DEM recortado para el polígono falló.")
-            return None
-            
-        shp_zip_bytes = export_gdf_to_zip(poly_gdf, "contorno_poligono_manual")
-        return { "poligono_gdf": poly_gdf, "hojas": hojas, "dem_bytes": dem_bytes, "dem_array": dem_recortado, "shp_zip_bytes": shp_zip_bytes, "area_km2": area_km2 }
-
-    except Exception as e:
-        st.error("Ha ocurrido un error inesperado durante el procesamiento del polígono.")
-        st.exception(e)
-        print(traceback.format_exc())
-        return None
-
-def export_gdf_to_zip(gdf, filename_base):
-    with tempfile.TemporaryDirectory() as tmpdir:
-        if gdf.crs is None: gdf.set_crs("EPSG:4326", inplace=True)
-        gdf.to_file(os.path.join(tmpdir, f"{filename_base}.shp"), driver='ESRI Shapefile', encoding='utf-8')
-        zip_io = io.BytesIO()
-        with zipfile.ZipFile(zip_io, 'w', zipfile.ZIP_DEFLATED) as zf:
-            for root, _, files in os.walk(tmpdir):
-                for file in files:
-                    if file.startswith(filename_base): zf.write(os.path.join(root, file), arcname=file)
-        zip_io.seek(0)
-        return zip_io
-
-@st.cache_data(show_spinner="Pre-calculando referencia de cauces (pyflwdir)...")
-# def precalcular_acumulacion(_dem_bytes):
-#     """
-#     Calcula la acumulación de flujo usando pyflwdir y la prepara para visualización.
-#     """
-#     try:
-#         # 1. Abrir el DEM en memoria
-#         with rasterio.io.MemoryFile(_dem_bytes) as memfile:
-#             with memfile.open() as src:
-#                 dem_array = src.read(1).astype(np.float32)
-#                 nodata = src.meta.get('nodata')
-#                 if nodata is not None:
-#                     dem_array[dem_array == nodata] = np.nan
-#                 transform = src.transform
-# 
-#         # 2. Calcular las direcciones de flujo y la acumulación con pyflwdir
-#         flwdir = pyflwdir.from_dem(data=dem_array, transform=transform, nodata=np.nan)
-#         acc = flwdir.upstream_area(unit='cell')
-#         
-#         
-#         # --- Generar la imagen binaria para acumulación de flujo ---
-#         # Los píxeles con acumulación mayor que el umbral serán 1 (blanco)
-#         # Los demás serán 0 (negro)
-#         umbral_acumulacion = 1000 # <-- Cambia este valor al número de celdas que necesites
-#         acc_binary = (acc > umbral_acumulacion).astype(np.uint8)
-#         
-#         # Folium requiere que los valores del ráster estén entre 0 y 1 para mapear el color,
-#         # así que aseguramos que los True se conviertan a 1 y los False a 0.
-#         
-#         
-#         
-#         # 3. Procesar el array de acumulación para una mejor visualización
-#         # Se usa una transformación logarítmica para resaltar los cauces principales
-#         # log_acc = np.log1p(acc)
-#         # --- INICIO DE LA SOLUCIÓN DEFINITIVA ---
-#         # La documentación confirma que 'acc' puede contener np.nan.
-#         # Los reemplazamos por 0 ANTES de cualquier cálculo matemático.
-#         acc_limpio = np.nan_to_num(acc, nan=0.0)
-# 
-#         # Por seguridad, también nos aseguramos de que no haya negativos.
-#         acc_limpio = np.where(acc_limpio < 0, 0, acc_limpio)
-#         
-#         # Ahora, calculamos el logaritmo sobre el array limpio y seguro.
-#         log_acc = np.log1p(acc_limpio)
-#         # --- FIN DE LA SOLUCIÓN DEFINITIVA ---
-# 
-#         min_val, max_val = np.nanmin(log_acc), np.nanmax(log_acc)
-#         
-#         if max_val == min_val:
-#             # Evitar división por cero si el ráster es plano
-#             img_acc = np.zeros_like(log_acc, dtype=np.uint8)
-#         else:
-#             # Normalizar los valores a un rango de 0-255 para crear una imagen en escala de grises
-#             log_acc_nan_as_zero = np.nan_to_num(log_acc, nan=min_val)
-#             img_acc = (255 * (log_acc_nan_as_zero - min_val) / (max_val - min_val)).astype(np.uint8)
-#         
-#         return img_acc
-# 
-#     except Exception as e:
-#         st.error(f"Error en el pre-cálculo con pyflwdir: {e}")
-#         import traceback
-#         st.code(traceback.format_exc()) # Muestra más detalles del error
-#         return None
-def precalcular_acumulacion(_dem_bytes):
-    try:
-        # Usamos rasterio para leer los datos del DEM desde los bytes en memoria
-        with rasterio.open(io.BytesIO(_dem_bytes)) as src:
-            dem_array = src.read(1)
-            dem_meta = src.meta
-
-        # Ahora creamos el objeto Grid de pysheds directamente desde el array de numpy
-        grid = Grid(dem_array, data_name="dem", nodata=dem_meta['nodata'], cellsize=dem_meta['transform'][0])
-        dem = grid.dem
-        dirmap = (64, 128, 1, 2, 4, 8, 16, 32)
-        flwdir = pyflwdir.from_width(
-            grid.dem, 25.0,
-            ftype="d8",
-            latlon=False,
-        )
-        acc = flwdir.upstream_area(unit='cell')
-
-        # --- Lógica agregada para crear la matriz binaria ---
-        umbral_acumulacion = 1000
-        acc_binary = (acc > umbral_acumulacion).astype(np.uint8)
-
-        # La función ahora devuelve una tupla con ambos objetos
-        return (flwdir, acc_binary)
-
-    except Exception as e:
-        st.error(f"Error en el pre-cálculo de acumulación: {e}")
-        return None, None
-
-# ==============================================================================
-# SECCIÓN 4: LÓGICA DE ANÁLISIS HIDROLÓGICO
+# SECCIÓN 3: LÓGICA DE ANÁLISIS HIDROLÓGICO
 # ==============================================================================
 
 def fig_to_base64(fig):
@@ -259,43 +56,55 @@ def fig_to_base64(fig):
     plt.close(fig)
     return base64.b64encode(buf.getvalue()).decode('utf-8')
 
-    
 def realizar_analisis_hidrologico_directo(dem_url, outlet_coords_wgs84, umbral_rio_export):
+    """
+    Ejecuta el flujo de trabajo hidrológico completo directamente en la aplicación.
+    Ahora lee el DEM directamente desde la URL.
+    """
     results = {
         "success": False, "message": "", "plots": {}, "downloads": {},
         "lfp_metrics": {}, "hypsometric_data": {}, "lfp_profile_data": {}
     }
-    dem_path_for_pysheds = None # Inicializar fuera del try
+    
+def realizar_analisis_hidrologico_directo(dem_url, outlet_coords_wgs84, umbral_rio_export):
+    results = { ... }
     try:
-        if dem_url is None:
+        if dem_url is None: # Comprobación de seguridad
             results['message'] = "Error: El DEM de entrada para el análisis hidrológico es None."
+            print("ERROR: realizar_analisis_hidrologico_directo - dem_url es None.")
             return results
 
         with rasterio.io.MemoryFile(dem_url) as memfile:
             with memfile.open() as src_global:
-                print(f"DEBUG: DEM global abierto. CRS: {src_global.crs}, Bounds: {src_global.bounds}")
+                print(f"DEBUG: realizar_analisis_hidrologico_directo - DEM global abierto desde MemoryFile. CRS: {src_global.crs}, Bounds: {src_global.bounds}") # <-- Añadir bounds
                 
                 transformer_wgs84_to_dem_crs = Transformer.from_crs("EPSG:4326", src_global.crs, always_xy=True)
                 x_dem_crs, y_dem_crs = transformer_wgs84_to_dem_crs.transform(outlet_coords_wgs84['lng'], outlet_coords_wgs84['lat'])
-                print(f"DEBUG: Outlet en CRS del DEM: ({x_dem_crs}, {y_dem_crs})")
+                print(f"DEBUG: realizar_analisis_hidrologico_directo - Outlet UTM: ({x_dem_crs}, {y_dem_crs})") # <-- Nuevo print
 
-                # ### FIX 2: VALIDACIÓN DE LÍMITES ###
-                # Se comprueba si el punto está dentro del DEM antes de continuar.
-                src_bounds = src_global.bounds
-                if not (src_bounds.left <= x_dem_crs <= src_bounds.right and src_bounds.bottom <= y_dem_crs <= src_bounds.top):
-                    results['message'] = "Error: El punto de desagüe seleccionado está fuera de los límites del área del DEM. Por favor, seleccione un punto dentro del área de la cuenca y su buffer."
-                    print(f"ERROR: Punto ({x_dem_crs}, {y_dem_crs}) fuera de los límites del DEM {src_bounds}")
-                    return results
+                buffer_size_for_pysheds = 5000
+                bbox_utm = (x_dem_crs - buffer_size_for_pysheds, y_dem_crs - buffer_size_for_pysheds,
+                            x_dem_crs + buffer_size_for_pysheds, y_dem_crs + buffer_size_for_pysheds)
+                print(f"DEBUG: realizar_analisis_hidrologico_directo - BBox para recorte PySheds: {bbox_utm}") # <-- Nuevo print
 
-                bbox_utm = (x_dem_crs - BUFFER_METROS, y_dem_crs - BUFFER_METROS,
-                            x_dem_crs + BUFFER_METROS, y_dem_crs + BUFFER_METROS)
-                print(f"DEBUG: BBox para recorte de PySheds: {bbox_utm}")
+                # --- Verificar si el bbox está dentro de src_global.bounds ---
+                # src_global.bounds es un BoundingBox, no un objeto Shapely.
+                # Convertimos ambos a objetos Polygon para usar 'intersects'.
+                # src_global_polygon = Polygon.from_bounds(*src_global.bounds) # <-- Comentado
+                # bbox_utm_polygon = Polygon.from_bounds(*bbox_utm) # <-- Comentado
+
+                # if not src_global_polygon.intersects(bbox_utm_polygon): # <-- Comentado
+                #     results['message'] = "Error: El punto de desagüe y su buffer están fuera del DEM recortado de la cuenca. Intente un punto más central."
+                #     print(f"ERROR: realizar_analisis_hidrologico_directo - BBox de PySheds fuera de los límites del DEM global. src_global.bounds: {src_global.bounds}")
+                #     return results
 
                 out_image, out_transform = mask(src_global, [Polygon.from_bounds(*bbox_utm)], crop=True, nodata=src_global.nodata)
+                print(f"DEBUG: realizar_analisis_hidrologico_directo - out_image.shape después de mask: {out_image.shape}") # <-- Nuevo print
+                print(f"DEBUG: realizar_analisis_hidrologico_directo - out_transform después de mask: {out_transform}") # <-- Nuevo print
                 
-                if out_image.size == 0 or out_image.shape[1] == 0 or out_image.shape[2] == 0:
-                    results['message'] = "Error: El recorte del DEM para el análisis resultó en una imagen vacía. Esto puede suceder si el punto de desagüe está demasiado cerca del borde. Intente con un punto más central."
-                    print(f"ERROR: out_image está vacío o inválido: {out_image.shape}")
+                if out_image.size == 0 or out_image.shape[1] == 0 or out_image.shape[2] == 0: # <-- Nueva comprobación
+                    results['message'] = "Error: El recorte del DEM para PySheds resultó en una imagen vacía o inválida."
+                    print(f"ERROR: realizar_analisis_hidrologico_directo - out_image está vacío o inválido: {out_image.shape}") # <-- Nuevo print
                     return results
 
                 out_meta = src_global.meta.copy()
@@ -305,29 +114,42 @@ def realizar_analisis_hidrologico_directo(dem_url, outlet_coords_wgs84, umbral_r
                     with rasterio.open(tmp_dem_pysheds.name, 'w', **out_meta) as dst:
                         dst.write(out_image)
                     dem_path_for_pysheds = tmp_dem_pysheds.name
-                print(f"DEBUG: DEM temporal para PySheds guardado en: {dem_path_for_pysheds}")
+                print(f"DEBUG: realizar_analisis_hidrologico_directo - DEM temporal para PySheds guardado en: {dem_path_for_pysheds}") # <-- Nuevo print
 
+        # --- PASO 2: PROCESAMIENTO HIDROLÓGICO CON PYSHEDS (CÓDIGO ORIGINAL) ---
         no_data_value = out_meta.get('nodata', -32768)
-        print(f"DEBUG: Iniciando Grid.from_raster con {dem_path_for_pysheds}")
+        print(f"DEBUG: realizar_analisis_hidrologico_directo - Iniciando Grid.from_raster con {dem_path_for_pysheds}") # <-- Nuevo print
         grid = Grid.from_raster(dem_path_for_pysheds, nodata=no_data_value)
+        print(f"DEBUG: realizar_analisis_hidrologico_directo - Grid creado. Extent: {grid.extent}") # <-- Nuevo print
         dem = grid.read_raster(dem_path_for_pysheds, nodata=no_data_value)
+        print(f"DEBUG: realizar_analisis_hidrologico_directo - DEM leído por Grid. Shape: {dem.shape}") # <-- Nuevo print
+
+        # Ajustamos las coordenadas del punto de salida al nuevo DEM recortado
+        x_snap, y_snap = grid.snap_to_mask(grid.accumulation(grid.flowdir(grid.fill_depressions(grid.fill_pits(dem)))) > umbral_rio_export, (x_dem_crs, y_dem_crs))
         
+        # Si el punto de snap está fuera del DEM recortado, ajustamos.
+        if not (grid.extent[0] <= x_snap <= grid.extent[1] and grid.extent[2] <= y_snap <= grid.extent[3]):
+            results['message'] = "El punto de desagüe se encuentra demasiado cerca del borde del DEM recortado para el análisis. Intente un punto más central."
+            return results
+
         pit_filled_dem = grid.fill_pits(dem)
         flooded_dem = grid.fill_depressions(pit_filled_dem)
         conditioned_dem = grid.resolve_flats(flooded_dem)
         flowdir = grid.flowdir(conditioned_dem)
         acc = grid.accumulation(flowdir)
         
+        # Re-snap al DEM recortado
         x_snap, y_snap = grid.snap_to_mask(acc > umbral_rio_export, (x_dem_crs, y_dem_crs))
-        
-        if not (grid.extent[0] <= x_snap <= grid.extent[1] and grid.extent[2] <= y_snap <= grid.extent[3]):
-            results['message'] = "El punto de desagüe se encuentra demasiado cerca del borde del área de análisis. Intente un punto más central."
-            return results
-
         catch = grid.catchment(x=x_snap, y=y_snap, fdir=flowdir, xytype="coordinate")
-        
-        grid.clip_to(catch)
-        conditioned_dem_clipped = grid.view(conditioned_dem, nodata=np.nan)
+
+        # --- PASO 3: INICIALIZACIÓN DE PYFLWDIR (CÓDIGO ORIGINAL) ---
+        # PyFlwdir también puede abrir el DEM recortado
+        flw = pyflwdir.from_dem(data=out_image[0], nodata=no_data_value, transform=out_transform, latlon=False)
+        upa = flw.upstream_area(unit='cell')
+
+        # --- PASO 4: GENERACIÓN DE GRÁFICOS Y MÉTRICAS (CÓDIGO ORIGINAL) ---
+        # Asegúrate de que las llamadas a imshow y plot usen 'grid_para_plot.extent' o 'grid.extent'
+        # y que los datos de elevación sean 'conditioned_dem' o 'dem_data' según corresponda.
 
         # GRÁFICO 1: MOSAICO DE CARACTERÍSTICAS
         grid_para_plot = Grid.from_raster(dem_path_for_pysheds, nodata=no_data_value)
@@ -498,21 +320,31 @@ def realizar_analisis_hidrologico_directo(dem_url, outlet_coords_wgs84, umbral_r
         results['success'] = True
         results['message'] = "Cálculo completado con éxito directamente desde la aplicación."
 
-    # ### FIX 1: RESTAURACIÓN DEL BLOQUE TRY-EXCEPT ###
-    # Este bloque es VITAL. Capturará cualquier error durante el proceso 
-    # y lo mostrará al usuario en lugar de colgar la aplicación.
+    # except Exception as e:
+    #     results['message'] = f"Error en el análisis hidrológico directo: {traceback.format_exc()}"
+    #     results['success'] = False
+    # finally:
+    #     # Aseguramos que el archivo temporal de PySheds se elimine
+    #     if 'dem_path_for_pysheds' in locals() and os.path.exists(dem_path_for_pysheds):
+    #         os.remove(dem_path_for_pysheds)
+    # 
+    # return results
+
+
     except Exception as e:
+        # Aseguramos que 'results' sea un diccionario antes de intentar asignarle un mensaje
         if not isinstance(results, dict):
-            results = {"success": False}
+            results = {"success": False} # Re-inicializar si no es un dict
         
-        error_message = f"Se produjo un error inesperado durante el análisis hidrológico.\n\nDETALLES TÉCNICOS:\n{traceback.format_exc()}"
-        results['message'] = error_message
+        results['message'] = f"Error en el análisis hidrológico directo: {e}\n{traceback.format_exc()}"
         results['success'] = False
         print(f"ERROR: realizar_analisis_hidrologico_directo - Error general capturado: {e}")
         print(traceback.format_exc())
     finally:
-        # Se asegura de que el archivo temporal siempre se elimine
-        if dem_path_for_pysheds and os.path.exists(dem_path_for_pysheds):
+        # Aseguramos que el archivo temporal de PySheds se elimine
+        # dem_path_for_pysheds solo se define si el bloque try se ejecuta hasta cierto punto.
+        # Es más seguro verificar si existe en locals() antes de intentar eliminarlo.
+        if 'dem_path_for_pysheds' in locals() and os.path.exists(dem_path_for_pysheds):
             try:
                 os.remove(dem_path_for_pysheds)
                 print(f"DEBUG: Archivo temporal eliminado: {dem_path_for_pysheds}")
@@ -521,7 +353,172 @@ def realizar_analisis_hidrologico_directo(dem_url, outlet_coords_wgs84, umbral_r
     return results
 
 
+# ==============================================================================
+# SECCIÓN 4: FUNCIONES AUXILIARES DE LA PESTAÑA
+# ==============================================================================
 
+@st.cache_data(show_spinner="Procesando la cuenca + buffer...")
+def procesar_datos_cuenca(basin_geojson_str):
+    try:
+        print("LOG: Iniciando procesar_datos_cuenca...")
+        
+        print("LOG: Descargando/obteniendo ruta de Hojas MTN25...")
+        local_zip_path = get_local_path_from_url(HOJAS_MTN25_PATH)
+        if not local_zip_path:
+            st.error("No se pudo obtener el archivo de hojas del MTN25 desde el caché.")
+            return None
+        print("LOG: Leyendo GDF de Hojas...")
+        hojas_gdf = gpd.read_file(local_zip_path)
+        
+        cuenca_gdf = gpd.read_file(basin_geojson_str).set_crs("EPSG:4326")
+        buffer_gdf = gpd.GeoDataFrame(geometry=cuenca_gdf.to_crs("EPSG:25830").buffer(BUFFER_METROS), crs="EPSG:25830")
+        
+        print("LOG: Realizando intersección espacial (sjoin)...")
+        geom_para_interseccion = buffer_gdf.to_crs(hojas_gdf.crs)
+        hojas = gpd.sjoin(hojas_gdf, geom_para_interseccion, how="inner", predicate="intersects").drop_duplicates(subset=['numero'])
+        
+        # --- ¡CRÍTICO! Abrimos el DEM Nacional (COG) directamente desde la URL con rasterio ---
+        print(f"LOG: Abriendo DEM Nacional (COG) directamente desde URL: {DEM_NACIONAL_PATH}...")
+        with rasterio.open(DEM_NACIONAL_PATH) as src:
+            geom_recorte_gdf = buffer_gdf.to_crs(src.crs)
+            print("LOG: Iniciando operación de recorte del DEM (rasterio.mask)...")
+      
+            dem_recortado, trans_recortado = mask(dataset=src, shapes=geom_recorte_gdf.geometry, crop=True, nodata=src.nodata or -32768)
+            # El GeoTransform es una tupla (top_left_x, pixel_width, rotation_x, top_left_y, rotation_y, pixel_height)
+            # pixel_width es trans_recortado[1] y pixel_height es trans_recortado[5]
+            print(f"DEBUG: generar_dem - Operación de recorte del DEM finalizada. Resolución de píxel: {trans_recortado[1]}x{abs(trans_recortado[5])}. Shape: {dem_recortado.shape}") # <-- Print corregido
+            
+            meta = src.meta.copy(); 
+            meta.update({"driver": "GTiff", "height": dem_recortado.shape[1], "width": dem_recortado.shape[2], "transform": trans_recortado, "compress": "NONE"})            
+            
+            with io.BytesIO() as buffer:
+                with rasterio.open(buffer, 'w', **meta) as dst:
+                    dst.write(dem_recortado)
+                buffer.seek(0)
+                dem_bytes = buffer.read()
+        
+        if dem_bytes is None:
+            st.error("La generación del DEM recortado falló (dem_bytes is None).")
+            return None
+        
+        print("LOG: Exportando GDF a ZIP...")
+        shp_zip_bytes = export_gdf_to_zip(buffer_gdf, "contorno_cuenca_buffer")
+        print("LOG: procesar_datos_cuenca finalizado con éxito.")
+        return { "cuenca_gdf": cuenca_gdf, "buffer_gdf": buffer_gdf.to_crs("EPSG:4326"), "hojas": hojas, "dem_bytes": dem_bytes, "dem_array": dem_recortado, "shp_zip_bytes": shp_zip_bytes }
+
+    except Exception as e:
+        st.error("Ha ocurrido un error inesperado durante el procesamiento de la cuenca.")
+        st.exception(e)
+        print(f"ERROR TRACEBACK en procesar_datos_cuenca: {traceback.format_exc()}")
+        return None
+
+@st.cache_data(show_spinner="Procesando el polígono dibujado...")
+def procesar_datos_poligono(polygon_geojson_str):
+    try:
+        poly_gdf = gpd.read_file(polygon_geojson_str).set_crs("EPSG:4326")
+        area_km2 = poly_gdf.to_crs("EPSG:25830").area.iloc[0] / 1_000_000
+        if area_km2 > LIMITE_AREA_KM2:
+            return {"error": f"El área ({area_km2:,.0f} km²) supera los límites de {LIMITE_AREA_KM2:,.0f} km²."}
+        
+        local_zip_path = get_local_path_from_url(HOJAS_MTN25_PATH)
+        if not local_zip_path:
+            st.error("No se pudo descargar el archivo de hojas del MTN25 desde la nube.")
+            return None
+        hojas_gdf = gpd.read_file(local_zip_path)
+        
+        geom_para_interseccion = poly_gdf.to_crs(hojas_gdf.crs)
+        hojas = gpd.sjoin(hojas_gdf, geom_para_interseccion, how="inner", predicate="intersects").drop_duplicates(subset=['numero'])
+        
+        # --- ¡CRÍTICO! Abrimos el DEM Nacional (COG) directamente desde la URL con rasterio ---
+        print(f"LOG: Abriendo DEM Nacional (COG) directamente desde URL: {DEM_NACIONAL_PATH} para polígono...")
+        with rasterio.open(DEM_NACIONAL_PATH) as src:
+            geom_recorte_gdf = poly_gdf.to_crs(src.crs)
+            dem_recortado, trans_recortado = mask(dataset=src, shapes=geom_recorte_gdf.geometry, crop=True, nodata=src.nodata or -32768)
+            meta = src.meta.copy()
+            meta.update({"driver": "GTiff", "height": dem_recortado.shape[1], "width": dem_recortado.shape[2], "transform": trans_recortado, "compress": "NONE"}) # <-- Añadir "compress": "NONE"
+            with io.BytesIO() as buffer:
+                with rasterio.open(buffer, 'w', **meta) as dst:
+                    dst.write(dem_recortado)
+                buffer.seek(0)
+                dem_bytes = buffer.read()
+
+        if dem_bytes is None:
+            st.error("La generación del DEM recortado para el polígono falló.")
+            return None
+            
+        shp_zip_bytes = export_gdf_to_zip(poly_gdf, "contorno_poligono_manual")
+        return { "poligono_gdf": poly_gdf, "hojas": hojas, "dem_bytes": dem_bytes, "dem_array": dem_recortado, "shp_zip_bytes": shp_zip_bytes, "area_km2": area_km2 }
+
+    except Exception as e:
+        st.error("Ha ocurrido un error inesperado durante el procesamiento del polígono.")
+        st.exception(e)
+        print(traceback.format_exc())
+        return None
+
+def export_gdf_to_zip(gdf, filename_base):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        if gdf.crs is None: gdf.set_crs("EPSG:4326", inplace=True)
+        gdf.to_file(os.path.join(tmpdir, f"{filename_base}.shp"), driver='ESRI Shapefile', encoding='utf-8')
+        zip_io = io.BytesIO()
+        with zipfile.ZipFile(zip_io, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for root, _, files in os.walk(tmpdir):
+                for file in files:
+                    if file.startswith(filename_base): zf.write(os.path.join(root, file), arcname=file)
+        zip_io.seek(0)
+        return zip_io
+
+@st.cache_data(show_spinner="Pre-calculando referencia de cauces (pyflwdir)...")
+def precalcular_acumulacion(_dem_bytes):
+    try:
+        # Pyflwdir necesita un archivo local o bytes en memoria.
+        # Si _dem_bytes es una URL, lo descargamos a un MemoryFile.
+        if isinstance(_dem_bytes, str) and _dem_bytes.startswith('http'):
+            with requests.get(_dem_bytes, stream=True) as r:
+                r.raise_for_status()
+                dem_bytes_content = r.content
+            memfile = rasterio.io.MemoryFile(dem_bytes_content)
+        else:
+            memfile = rasterio.io.MemoryFile(_dem_bytes)
+
+        with memfile.open() as src:
+            dem_array = src.read(1).astype(np.float32)
+            nodata = src.meta.get('nodata')
+            if nodata is not None: dem_array[dem_array == nodata] = np.nan
+            transform = src.transform
+        
+        flwdir = pyflwdir.from_dem(data=dem_array, transform=transform, nodata=np.nan)
+        acc = flwdir.upstream_area(unit='cell')
+        acc_limpio = np.nan_to_num(acc, nan=0.0)
+        acc_limpio = np.where(acc_limpio < 0, 0, acc_limpio)
+
+        # Nuevo: Usar una transformación de potencia (corrección gamma) para aumentar el contraste
+        # y hacer los píxeles de los cauces más evidentes para la selección.
+        # Un exponente pequeño (ej. 0.2) realza los valores altos de acumulación,
+        # haciendo que los píxeles individuales de la red fluvial sean más nítidos.
+        power_factor = 0.2 # Valor recomendado para realce de contraste. Ajustar si es necesario (0.1 para más, 0.3 para menos).
+        scaled_acc_for_viz = acc_limpio ** power_factor # <-- Nueva línea para la transformación de potencia
+        
+        min_val, max_val = np.nanmin(scaled_acc_for_viz), np.nanmax(scaled_acc_for_viz) # <-- Usar la nueva variable aquí
+        
+        if max_val == min_val:
+            # Evitar división por cero si el ráster es plano
+            img_acc = np.zeros_like(scaled_acc_for_viz, dtype=np.uint8) # <-- Usar la nueva variable aquí
+        else:
+            # Normalizar los valores a un rango de 0-255 para crear una imagen en escala de grises
+            scaled_acc_nan_as_zero = np.nan_to_num(scaled_acc_for_viz, nan=min_val) # <-- Usar la nueva variable aquí
+            img_acc = (255 * (scaled_acc_nan_as_zero - min_val) / (max_val - min_val)).astype(np.uint8)
+        # log_acc = np.log1p(acc_limpio)
+        # min_val, max_val = np.nanmin(log_acc), np.nanmax(log_acc)
+        # if max_val == min_val:
+        #     img_acc = np.zeros_like(log_acc, dtype=np.uint8)
+        # else:
+        #     log_acc_nan_as_zero = np.nan_to_num(log_acc, nan=min_val)
+        #     img_acc = (255 * (log_acc_nan_as_zero - min_val) / (max_val - min_val)).astype(np.uint8)
+        return img_acc
+    except Exception as e:
+        st.error(f"Error en el pre-cálculo con pyflwdir: {e}")
+        st.code(traceback.format_exc())
+        return None
 
 # ==============================================================================
 # SECCIÓN 5: FUNCIÓN PRINCIPAL DEL FRONTEND (RENDERIZADO DE LA PESTAÑA)
@@ -531,6 +528,12 @@ def render_dem25_tab():
     st.header("Generador de Modelos Digitales del Terreno (MDT25)")
     st.subheader("(from NASA’s Earth Observing System Data and Information System -EOSDIS)")
     
+    # --- INICIO: LLAMADA A LA FUNCIÓN DE PRE-CALENTAMIENTO ---
+    # Esta función ya no es necesaria aquí, ya que los COGs se leen directamente.
+    # La eliminamos para evitar confusiones y posibles descargas innecesarias.
+    # precalentar_cache_archivos_grandes() 
+    # --- FIN ---
+
     st.info("Esta herramienta identifica las hojas del MTN25 y genera un DEM recortado para la cuenca (con buffer de 5km) o para un área dibujada manualmente.")
 
     if not st.session_state.get('basin_geojson'):
@@ -554,9 +557,8 @@ def render_dem25_tab():
         if results:
             st.session_state.cuenca_results = results
             st.session_state.processed_basin_id = st.session_state.basin_geojson
-            #.session_state.precalculated_acc = precalcular_acumulacion(results['dem_bytes'])
-            # Ahora precalcular_acumulacion devuelve la matriz binaria y el objeto flwdir
-            st.session_state.precalculated_acc, st.session_state.acc_binary_precalc = precalcular_acumulacion(results['dem_bytes'])
+            # precalcular_acumulacion ahora recibe los bytes del DEM recortado, no la URL del DEM nacional
+            st.session_state.precalculated_acc = precalcular_acumulacion(results['dem_bytes']) 
             st.session_state.pop('poligono_results', None)
             st.session_state.pop('user_drawn_geojson', None)
             st.session_state.pop('polygon_error_message', None)
@@ -567,12 +569,16 @@ def render_dem25_tab():
             st.error("No se pudo procesar la cuenca. La operación falló o superó el tiempo de espera. Revisa los logs del servidor para más detalles.")
             st.session_state.show_dem25_content = False
 
-    if not st.session_state.get('show_dem25_content') or not st.session_state.get('cuenca_results'):
-        st.info("Seleccione un punto en el mapa y haga clic en 'Analizar Hojas y DEM para la Cuenca Actual' para empezar.")
-        return
+    # if not st.session_state.get('show_dem25_content') or not st.session_state.get('cuenca_results'):
+    #     st.stop()
 
+    if not st.session_state.get('show_dem25_content') or not st.session_state.get('cuenca_results'):
+        st.info("Seleccione un punto en el mapa y haga clic en 'Analizar Hojas y DEM para la Cuenca Actual' para empezar.") # <-- Nueva línea
+        return # <-- Reemplaza st.stop()
+
+    
     st.subheader("Mapa de Situación")
-    m = folium.Map(tiles="CartoDB positron", zoom_start=10)
+    m = folium.Map(tiles="CartoDB positron", zoom_start=10) # Añadido zoom_start para mejor visualización inicial
     folium.TileLayer('OpenStreetMap').add_to(m)
     folium.TileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', attr='Esri', name='Imágenes Satélite').add_to(m)
     cuenca_results = st.session_state.cuenca_results
@@ -583,50 +589,33 @@ def render_dem25_tab():
     
     if st.session_state.get('user_drawn_geojson'): folium.GeoJson(json.loads(st.session_state.user_drawn_geojson), name="Polígono Dibujado", style_function=lambda x: {'color': 'magenta', 'weight': 3, 'fillOpacity': 0.2, 'dashArray': '5, 5'}).add_to(m)
     if 'poligono_results' in st.session_state and "error" not in st.session_state.poligono_results: folium.GeoJson(st.session_state.poligono_results['hojas'], name="Hojas (Polígono)", style_function=lambda x: {'color': 'magenta', 'weight': 2.5, 'fillOpacity': 0.5}).add_to(m)
-    
-    # Activar siempre el plugin de dibujo si se ha iniciado el modo
-    if st.session_state.get("drawing_mode_active"): 
-        Draw(export=True, filename='data.geojson', position='topleft', draw_options={'polyline': False, 'rectangle': False, 'circle': False, 'marker': False, 'circlemarker': False, 'polygon': {'shapeOptions': {'color': 'magenta', 'weight': 3, 'fillOpacity': 0.2}}}, edit_options={'edit': False}).add_to(m)
-    
+    if st.session_state.get("drawing_mode_active"): Draw(export=True, filename='data.geojson', position='topleft', draw_options={'polyline': False, 'rectangle': False, 'circle': False, 'marker': False, 'circlemarker': False, 'polygon': {'shapeOptions': {'color': 'magenta', 'weight': 3, 'fillOpacity': 0.2}}}, edit_options={'edit': False}).add_to(m)
     folium.LayerControl().add_to(m)
+    # map_output = st_folium(m, use_container_width=True, height=800, returned_objects=['all_drawings'])
     map_output = st_folium(m, key="situacion_map", use_container_width=True, height=800, returned_objects=['all_drawings'])
-    # Procesar el dibujo cuando se complete
     if st.session_state.get("drawing_mode_active") and map_output.get("all_drawings"):
-        st.session_state.user_drawn_geojson = json.dumps(map_output["all_drawings"][0]['geometry'])
-        st.session_state.drawing_mode_active = False
-        st.rerun()
+        # Añadir un print para verificar el contenido
+        print(f"DEBUG: Dibujo completado. GeoJSON: {json.dumps(map_output['all_drawings'][0]['geometry'])}") # <-- Añadir este print        
+        st.session_state.user_drawn_geojson = json.dumps(map_output["all_drawings"][0]['geometry']); 
+        st.session_state.drawing_mode_active = False; 
+        st.rerun() # <-- Asegurarse de que este rerun esté presente
 
     with st.expander("📝 Herramientas de Dibujo para un área personalizada"):
-        st.info("Para dibujar: 1. Inicie el dibujo. 2. Haga clic en el mapa para añadir puntos. 3. Para cerrar el polígono, haga clic en el primer punto. 4. **MUY IMPORTANTE**: Haga clic en 'Finish' en la barra de herramientas del mapa.")
         c1, c2, c3 = st.columns([2, 2, 3])
         if c1.button("Iniciar / Reiniciar Dibujo", use_container_width=True): 
-            st.session_state.drawing_mode_active = True
-            st.session_state.pop('user_drawn_geojson', None)
-            st.session_state.pop('poligono_results', None)
-            st.session_state.pop('polygon_error_message', None)
-            st.rerun()
-        if c2.button("Cancelar Dibujo", use_container_width=True): 
-            st.session_state.drawing_mode_active = False
-            st.rerun()
-        
-        # El botón de análisis ahora depende de si se ha guardado un GeoJSON
+            st.session_state.drawing_mode_active = True; st.session_state.pop('user_drawn_geojson', None); st.session_state.pop('poligono_results', None); st.session_state.pop('polygon_error_message', None); st.rerun()
+        if c2.button("Cancelar Dibujo", use_container_width=True): st.session_state.drawing_mode_active = False; st.rerun()
         if st.session_state.get('user_drawn_geojson'):
-            if c3.button("▶️ Analizar Polígono Dibujado", use_container_width=True, type="primary"):
+            if c3.button("▶️ Analizar Polígono Dibujado", use_container_width=True):
                 results = procesar_datos_poligono(st.session_state.user_drawn_geojson)
-                if "error" in results: 
-                    st.session_state.polygon_error_message = results["error"]
-                    st.session_state.pop('poligono_results', None)
-                else: 
-                    st.session_state.poligono_results = results
-                    st.session_state.pop('polygon_error_message', None)
+                if "error" in results: st.session_state.polygon_error_message = results["error"]; st.session_state.pop('poligono_results', None)
+                else: st.session_state.poligono_results = results; st.session_state.pop('polygon_error_message', None)
                 st.rerun()
 
     if st.session_state.get('polygon_error_message'):
         st.markdown(f"<p style='font-size: 20px; color: tomato; font-weight: bold;'>⚠️ {st.session_state.get('polygon_error_message')}</p>", unsafe_allow_html=True)
 
     st.divider()
-    
-    
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("Resultados (Cuenca + Buffer)")
@@ -674,38 +663,15 @@ def render_dem25_tab():
     if st.session_state.get('lat_wgs84') and st.session_state.get('lon_wgs84'):
         folium.Marker([st.session_state.lat_wgs84, st.session_state.lon_wgs84], popup="Punto de Interés (Pestaña 1)", icon=folium.Icon(color="red", icon="info-sign")).add_to(map_select)
 
-    # if 'precalculated_acc' in st.session_state and st.session_state.precalculated_acc is not None:
-    #     acc_raster = st.session_state.precalculated_acc
-    #     bounds = buffer_gdf.total_bounds
-    #     img = Image.fromarray(acc_raster)
-    #     buffered = io.BytesIO()
-    #     img.save(buffered, format="PNG")
-    #     img_str = base64.b64encode(buffered.getvalue()).decode()
-    #     img_url = f"data:image/png;base64,{img_str}"
-    #     folium.raster_layers.ImageOverlay(image=img_url, bounds=[[bounds[1], bounds[0]], [bounds[3], bounds[2]]], opacity=0.6, name='Referencia de Cauces (Acumulación)').add_to(map_select)
-
-    if 'acc_binary_precalc' in st.session_state and st.session_state.acc_binary_precalc is not None:
-        # Definimos los límites del DEM para la capa de imagen
-        dem_bounds = st.session_state.cuenca_results['dem_bounds']
-        bounds = [[dem_bounds.bottom, dem_bounds.left], [dem_bounds.top, dem_bounds.right]]
-    
-        # Creamos un colormap de blanco y negro
-        blanco_negro_cmap = colors.ListedColormap(['black', 'white'])
-    
-        # Superponemos la imagen binaria directamente desde el array de numpy
-        # La opción 'pixelated=True' evita la interpolación y suavizado
-        folium.raster_layers.ImageOverlay(
-            name="Referencia de Cauces (Acumulación)",
-            image=st.session_state.acc_binary_precalc,
-            bounds=bounds,
-            opacity=0.6, # Puedes ajustar la opacidad
-            interactive=True,
-            cross_origin=False,
-            zindex=1,
-            colormap=blanco_negro_cmap,
-            pixelated=True
-        ).add_to(map_select)
-
+    if 'precalculated_acc' in st.session_state and st.session_state.precalculated_acc is not None:
+        acc_raster = st.session_state.precalculated_acc
+        bounds = buffer_gdf.total_bounds
+        img = Image.fromarray(acc_raster)
+        buffered = io.BytesIO()
+        img.save(buffered, format="PNG")
+        img_str = base64.b64encode(buffered.getvalue()).decode()
+        img_url = f"data:image/png;base64,{img_str}"
+        folium.raster_layers.ImageOverlay(image=img_url, bounds=[[bounds[1], bounds[0]], [bounds[3], bounds[2]]], opacity=0.6, pixelated=True, name='Referencia de Cauces (Acumulación)').add_to(map_select) # añadimos --> pixelated=True
 
     if 'outlet_coords' in st.session_state and st.session_state.outlet_coords is not None:
         coords = st.session_state.outlet_coords
