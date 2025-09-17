@@ -158,37 +158,91 @@ def export_gdf_to_zip(gdf, filename_base):
         return zip_io
 
 @st.cache_data(show_spinner="Pre-calculando referencia de cauces (pyflwdir)...")
-def precalcular_acumulacion(_dem_bytes):
-    try:
-        memfile = rasterio.io.MemoryFile(_dem_bytes)
+# def precalcular_acumulacion(_dem_bytes):
+#     try:
+#         memfile = rasterio.io.MemoryFile(_dem_bytes)
+# 
+#         with memfile.open() as src:
+#             dem_array = src.read(1).astype(np.float32)
+#             nodata = src.meta.get('nodata')
+#             if nodata is not None: dem_array[dem_array == nodata] = np.nan
+#             transform = src.transform
+#         
+#         flwdir = pyflwdir.from_dem(data=dem_array, transform=transform, nodata=np.nan)
+#         acc = flwdir.upstream_area(unit='cell')
+#         acc_limpio = np.nan_to_num(acc, nan=0.0)
+#         acc_limpio = np.where(acc_limpio < 0, 0, acc_limpio)
+#         
+#         power_factor = 0.2
+#         scaled_acc_for_viz = acc_limpio ** power_factor
+#         
+#         min_val, max_val = np.nanmin(scaled_acc_for_viz), np.nanmax(scaled_acc_for_viz)
+#         
+#         if max_val == min_val:
+#             img_acc = np.zeros_like(scaled_acc_for_viz, dtype=np.uint8)
+#         else:
+#             scaled_acc_nan_as_zero = np.nan_to_num(scaled_acc_for_viz, nan=min_val)
+#             img_acc = (255 * (scaled_acc_nan_as_zero - min_val) / (max_val - min_val)).astype(np.uint8)
+#         
+#         return img_acc
+#     except Exception as e:
+#         st.error(f"Error en el pre-cálculo con pyflwdir: {e}")
+#         st.code(traceback.format_exc())
+#         return 
 
-        with memfile.open() as src:
-            dem_array = src.read(1).astype(np.float32)
-            nodata = src.meta.get('nodata')
-            if nodata is not None: dem_array[dem_array == nodata] = np.nan
-            transform = src.transform
-        
+def precalcular_acumulacion(_dem_bytes):
+    """
+    Calcula la acumulación de flujo usando pyflwdir y la prepara para visualización.
+    """
+    try:
+        # 1. Abrir el DEM en memoria
+        with rasterio.io.MemoryFile(_dem_bytes) as memfile:
+            with memfile.open() as src:
+                dem_array = src.read(1).astype(np.float32)
+                nodata = src.meta.get('nodata')
+                if nodata is not None:
+                    dem_array[dem_array == nodata] = np.nan
+                transform = src.transform
+
+        # 2. Calcular las direcciones de flujo y la acumulación con pyflwdir
         flwdir = pyflwdir.from_dem(data=dem_array, transform=transform, nodata=np.nan)
         acc = flwdir.upstream_area(unit='cell')
+
+        # 3. Procesar el array de acumulación para una mejor visualización
+        # Se usa una transformación logarítmica para resaltar los cauces principales
+        # log_acc = np.log1p(acc)
+        # --- INICIO DE LA SOLUCIÓN DEFINITIVA ---
+        # La documentación confirma que 'acc' puede contener np.nan.
+        # Los reemplazamos por 0 ANTES de cualquier cálculo matemático.
         acc_limpio = np.nan_to_num(acc, nan=0.0)
+
+        # Por seguridad, también nos aseguramos de que no haya negativos.
         acc_limpio = np.where(acc_limpio < 0, 0, acc_limpio)
         
-        power_factor = 0.2
-        scaled_acc_for_viz = acc_limpio ** power_factor
-        
-        min_val, max_val = np.nanmin(scaled_acc_for_viz), np.nanmax(scaled_acc_for_viz)
+        # Ahora, calculamos el logaritmo sobre el array limpio y seguro.
+        log_acc = np.log1p(acc_limpio)
+        # --- FIN DE LA SOLUCIÓN DEFINITIVA ---
+
+        min_val, max_val = np.nanmin(log_acc), np.nanmax(log_acc)
         
         if max_val == min_val:
-            img_acc = np.zeros_like(scaled_acc_for_viz, dtype=np.uint8)
+            # Evitar división por cero si el ráster es plano
+            img_acc = np.zeros_like(log_acc, dtype=np.uint8)
         else:
-            scaled_acc_nan_as_zero = np.nan_to_num(scaled_acc_for_viz, nan=min_val)
-            img_acc = (255 * (scaled_acc_nan_as_zero - min_val) / (max_val - min_val)).astype(np.uint8)
+            # Normalizar los valores a un rango de 0-255 para crear una imagen en escala de grises
+            log_acc_nan_as_zero = np.nan_to_num(log_acc, nan=min_val)
+            img_acc = (255 * (log_acc_nan_as_zero - min_val) / (max_val - min_val)).astype(np.uint8)
         
         return img_acc
+
     except Exception as e:
         st.error(f"Error en el pre-cálculo con pyflwdir: {e}")
-        st.code(traceback.format_exc())
+        import traceback
+        st.code(traceback.format_exc()) # Muestra más detalles del error
         return None
+
+
+
 # ==============================================================================
 # SECCIÓN 4: LÓGICA DE ANÁLISIS HIDROLÓGICO
 # ==============================================================================
