@@ -1,4 +1,4 @@
-# dem25_tab.py (Versión Definitiva con PyFlwdir y Correcciones)
+# dem25_tab.py (Versión Definitiva - Lógica Original Restaurada y Adaptada)
 
 # ==============================================================================
 # SECCIÓN 1: IMPORTS
@@ -22,7 +22,7 @@ import traceback
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 import numpy as np
-# Se elimina PySheds para evitar conflictos. Todo se hará con PyFlwdir y Rasterio.
+from pysheds.grid import Grid # La librería original y correcta para esta lógica
 import pyflwdir
 from rasterio.mask import mask
 from rasterio import features
@@ -38,7 +38,7 @@ BUFFER_METROS = 5000
 TARGET_CRS_DOWNLOAD = "EPSG:25830"
 
 # ==============================================================================
-# SECCIÓN 3: LÓGICA DE ANÁLISIS HIDROLÓGICO (REESCRITA CON PYFLWDIR)
+# SECCIÓN 3: LÓGICA DE ANÁLISIS HIDROLÓGICO (BASADA EN EL CÓDIGO ORIGINAL)
 # ==============================================================================
 
 def fig_to_base64(fig):
@@ -47,92 +47,72 @@ def fig_to_base64(fig):
     plt.close(fig)
     return base64.b64encode(buf.getvalue()).decode('utf-8')
 
-# --- FUNCIÓN DE ANÁLISIS UNIFICADA Y ROBUSTA ---
-@st.cache_data(show_spinner="Ejecutando análisis hidrológico completo con PyFlwdir...")
-def analisis_hidrologico_completo_pyflwdir(_dem_bytes, outlet_coords_wgs84, umbral_celdas):
+@st.cache_data(show_spinner="Ejecutando análisis hidrológico completo...")
+def analisis_hidrologico_pysheds_pyflwdir(_dem_bytes, outlet_coords_wgs84, umbral_celdas):
     results = {"success": False, "message": ""}
+    dem_path = None
     try:
-        with rasterio.io.MemoryFile(_dem_bytes) as memfile:
-            with memfile.open() as src:
-                dem_array = src.read(1)
-                dem_crs = src.crs
-                transform = src.transform
-                nodata = src.nodata or -32768
-                
-                # Cargar DEM en PyFlwdir
-                flw = pyflwdir.from_dem(data=dem_array, transform=transform, nodata=nodata, latlon=False)
-                
-                # Correcciones hidrológicas
-                dem_filled = flw.fill_depressions(dem=dem_array)
-                flw = flw.flwdir(dem=dem_filled, out_dtype=np.uint8)
-                
-                # Acumulación de flujo
-                upa = flw.upstream_area(unit='cell')
-                
-                # Transformar punto de salida y ajustarlo (snap)
-                transformer = Transformer.from_crs("EPSG:4628", dem_crs, always_xy=True)
-                x_dem, y_dem = transformer.transform(outlet_coords_wgs84['lng'], outlet_coords_wgs84['lat'])
-                
-                # Snap al cauce más cercano con acumulación mayor al umbral
-                xy_snap = flw.snap((x_dem, y_dem), mask=upa > umbral_celdas, max_dist=1000)
-                
-                # Delinear cuenca
-                catchment_mask = flw.catchment(xy=xy_snap)
-                
-                # Trazar el río principal (LFP)
-                river_geom = flw.main_river(xy=xy_snap)
-                gdf_lfp = gpd.GeoDataFrame(geometry=[river_geom], crs=dem_crs)
-                
-                # Extraer geometría de la cuenca
-                shapes = features.shapes(catchment_mask.astype(np.uint8), mask=catchment_mask, transform=transform)
-                cuenca_geom = [Polygon(s['coordinates'][0]) for s, v in shapes if v == 1][0]
-                gdf_cuenca = gpd.GeoDataFrame(geometry=[cuenca_geom], crs=dem_crs)
-                
-                # Red fluvial de Strahler
-                stream_mask = upa > umbral_celdas
-                strord = flw.stream_order(mask=stream_mask, type='strahler')
-                streams = flw.streams(mask=stream_mask, strord=strord)
-                gdf_rios = gpd.GeoDataFrame.from_features(streams, crs=dem_crs)
-                
-                # Métricas del LFP
-                lfp_coords = list(river_geom.coords)
-                profile_elevations = [dem_filled[flw.xy_to_idx(xy)] for xy in lfp_coords]
-                profile_distances = [0] + np.cumsum([np.sqrt((x2-x1)**2 + (y2-y1)**2) for (x1,y1), (x2,y2) in zip(lfp_coords, lfp_coords[1:])]).tolist()
-                
-                longitud_total_m = profile_distances[-1] if profile_distances else 0
-                cota_ini, cota_fin = (profile_elevations[-1], profile_elevations[0]) if profile_elevations else (0,0)
-                desnivel = abs(cota_fin - cota_ini)
-                pendiente_media = desnivel / longitud_total_m if longitud_total_m > 0 else 0
-                
-                # Gráfico Mosaico
-                fig, axes = plt.subplots(1, 2, figsize=(12, 6))
-                ext = flw.extent
-                dem_view = np.where(catchment_mask, dem_filled, np.nan)
-                im_dem = axes[0].imshow(dem_view, extent=ext, cmap='terrain'); axes[0].set_title("Elevación en la Cuenca")
-                fig.colorbar(im_dem, ax=axes[0], label='Elevación (m)', shrink=0.7)
-                im_acc = axes[1].imshow(np.where(catchment_mask, upa, 0), extent=ext, cmap='cubehelix', norm=colors.LogNorm(vmin=1, vmax=upa.max())); axes[1].set_title("Acumulación de Flujo")
-                fig.colorbar(im_acc, ax=axes[1], label='Nº celdas', shrink=0.7)
-                plt.tight_layout()
-                plot_mosaico_b64 = fig_to_base64(fig)
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.tif') as tmp:
+            tmp.write(_dem_bytes); dem_path = tmp.name
 
+        # --- 1. Procesamiento principal con PySheds (como en el original) ---
+        grid = Grid.from_raster(dem_path)
+        dem = grid.read_raster(dem_path)
+        
+        pit_filled_dem = grid.fill_pits(dem)
+        flooded_dem = grid.fill_depressions(pit_filled_dem)
+        conditioned_dem = grid.resolve_flats(flooded_dem)
+        flowdir = grid.flowdir(conditioned_dem)
+        acc = grid.accumulation(flowdir)
+        
+        transformer = Transformer.from_crs("EPSG:4326", grid.crs.srs, always_xy=True)
+        x_dem, y_dem = transformer.transform(outlet_coords_wgs84['lng'], outlet_coords_wgs84['lat'])
+        x_snap, y_snap = grid.snap_to_mask(acc > umbral_celdas, (x_dem, y_dem))
+        
+        catch = grid.catchment(x=x_snap, y=y_snap, fdir=flowdir, xytype='coordinate')
+        grid.clip_to(catch)
+        clipped_catch = grid.view(catch)
+        
+        # --- 2. LFP con PySheds ---
+        dist = grid.flow_distance(x=x_snap, y=y_snap, fdir=flowdir, xytype='coordinate')
+        
+        # --- 3. Geometrías (Cuenca, LFP, Punto) ---
+        shapes = grid.polygonize()
+        gdf_cuenca = gpd.GeoDataFrame.from_features(shapes, crs=grid.crs.srs)
+        
+        lfp_points = grid.longest_flow_path(x=x_snap, y=y_snap, fdir=flowdir, dist=dist, xytype='coordinate')
+        gdf_lfp = gpd.GeoDataFrame([{'geometry': LineString(lfp_points)}], crs=grid.crs.srs)
+        
+        gdf_punto = gpd.GeoDataFrame([{'geometry': Point(x_snap, y_snap)}], crs=grid.crs.srs)
+
+        # --- 4. Red Fluvial con PyFlwdir (usando los datos ya procesados) ---
+        flw = pyflwdir.from_dem(data=grid.view(conditioned_dem), nodata=grid.nodata, transform=grid.affine, latlon=False)
+        upa = flw.upstream_area(unit='cell')
+        stream_mask = upa > umbral_celdas
+        strord = flw.stream_order(mask=stream_mask, type='strahler')
+        streams = flw.streams(mask=stream_mask, strord=strord)
+        gdf_rios = gpd.GeoDataFrame.from_features(streams, crs=grid.crs.srs)
+
+        # --- 5. Métricas ---
+        area_km2 = gdf_cuenca.area.sum() / 1_000_000
+        longitud_m = gdf_lfp.length.iloc[0]
+        
         results.update({
-            "success": True, "message": "Análisis completado con éxito.",
+            "success": True, "message": "Análisis completado.",
             "geometries_json": {
                 "cuenca": gdf_cuenca.to_json(), "lfp": gdf_lfp.to_json(),
-                "punto": gpd.GeoDataFrame(geometry=[Point(xy_snap)], crs=dem_crs).to_json(),
-                "rios": gdf_rios.to_json()
+                "punto": gdf_punto.to_json(), "rios": gdf_rios.to_json()
             },
-            "metrics": {
-                "area_km2": cuenca_geom.area / 1_000_000,
-                "lfp_metrics": {"longitud_m": longitud_total_m, "pendiente_media": pendiente_media}
-            },
-            "plots": {"mosaico": plot_mosaico_b64}
+            "metrics": {"area_km2": area_km2, "lfp_longitud_m": longitud_m}
         })
         return results
 
     except Exception as e:
-        results['message'] = f"Error en el análisis con PyFlwdir: {e}\n{traceback.format_exc()}"
+        results['message'] = f"Error en el análisis: {e}\n{traceback.format_exc()}"
         return results
+    finally:
+        if dem_path and os.path.exists(dem_path):
+            os.remove(dem_path)
 
 # ==============================================================================
 # SECCIÓN 4: FUNCIONES AUXILIARES
@@ -140,18 +120,23 @@ def analisis_hidrologico_completo_pyflwdir(_dem_bytes, outlet_coords_wgs84, umbr
 @st.cache_data(show_spinner="Procesando la cuenca + buffer...")
 def procesar_datos_cuenca(basin_geojson_str):
     try:
+        hojas_gdf = gpd.read_file(get_local_path_from_url(HOJAS_MTN25_PATH))
         cuenca_gdf = gpd.read_file(basin_geojson_str).set_crs("EPSG:4326")
         buffer_gdf = gpd.GeoDataFrame(geometry=cuenca_gdf.to_crs(TARGET_CRS_DOWNLOAD).buffer(BUFFER_METROS), crs=TARGET_CRS_DOWNLOAD)
+        hojas_intersectadas = gpd.sjoin(hojas_gdf, buffer_gdf.to_crs(hojas_gdf.crs), how="inner", predicate="intersects").drop_duplicates(subset=['numero'])
+        
         with rasterio.open(DEM_NACIONAL_PATH) as src:
-            dem_recortado, _ = mask(dataset=src, shapes=buffer_gdf.to_crs(src.crs).geometry, crop=True, nodata=src.nodata or -32768)
+            dem_recortado, trans_recortado = mask(dataset=src, shapes=buffer_gdf.to_crs(src.crs).geometry, crop=True, nodata=src.nodata or -32768)
             meta = src.meta.copy()
-            meta.update({"driver": "GTiff", "height": dem_recortado.shape[1], "width": dem_recortado.shape[2], "transform": _, "compress": "NONE"})
+            meta.update({"driver": "GTiff", "height": dem_recortado.shape[1], "width": dem_recortado.shape[2], "transform": trans_recortado})
             with io.BytesIO() as buffer:
-                with rasterio.open(buffer, 'w', **meta) as dst:
-                    dst.write(dem_recortado)
-                buffer.seek(0)
-                dem_bytes = buffer.read()
-        return {"buffer_gdf": buffer_gdf.to_crs("EPSG:4326"), "dem_bytes": dem_bytes}
+                with rasterio.open(buffer, 'w', **meta) as dst: dst.write(dem_recortado)
+                buffer.seek(0); dem_bytes = buffer.read()
+        
+        return {
+            "buffer_gdf": buffer_gdf.to_crs("EPSG:4326"), "dem_bytes": dem_bytes,
+            "dem_array": dem_recortado, "hojas": hojas_intersectadas
+        }
     except Exception as e:
         st.error(f"Error procesando la cuenca: {e}"); return None
 
@@ -175,11 +160,10 @@ def precalcular_acumulacion(_dem_bytes):
             with memfile.open() as src:
                 flw = pyflwdir.from_dem(data=src.read(1), transform=src.transform, nodata=src.nodata, latlon=False)
                 acc = flw.upstream_area(unit='cell')
-        acc_limpio = np.nan_to_num(acc, nan=0.0)
-        scaled_acc = acc_limpio ** 0.2
-        min_v, max_v = np.nanmin(scaled_acc), np.nanmax(scaled_acc)
-        if max_v == min_v: return np.zeros_like(scaled_acc, dtype=np.uint8)
-        img_acc = (255 * (np.nan_to_num(scaled_acc, nan=min_v) - min_v) / (max_v - min_v)).astype(np.uint8)
+        acc_limpio = np.nan_to_num(acc, nan=0.0) ** 0.2
+        min_v, max_v = np.nanmin(acc_limpio), np.nanmax(acc_limpio)
+        if max_v == min_v: return np.zeros_like(acc_limpio, dtype=np.uint8)
+        img_acc = (255 * (np.nan_to_num(acc_limpio, nan=min_v) - min_v) / (max_v - min_v)).astype(np.uint8)
         return img_acc
     except Exception as e:
         st.error(f"Error en pre-cálculo: {e}"); return None
@@ -208,25 +192,42 @@ def render_dem25_tab():
     if not st.session_state.get('show_dem25_content'):
         st.info("Haga clic en el botón de arriba para empezar."); return
 
+    # --- SECCIÓN DE RESULTADOS INICIALES (RESTAURADA) ---
+    st.divider()
+    st.subheader("Resultados del Área de Análisis (Cuenca + Buffer 5km)")
+    cuenca_results = st.session_state.cuenca_results
+    
+    m_inicial = folium.Map(tiles="CartoDB positron")
+    folium.GeoJson(cuenca_results['hojas'], name="Hojas MTN25", style_function=lambda x: {'color': '#ffc107', 'weight': 2, 'fillOpacity': 0.4}, tooltip=lambda f: f"Hoja: {f['properties']['numero']}").add_to(m_inicial)
+    buffer_layer = folium.GeoJson(cuenca_results['buffer_gdf'], name="Área de Análisis", style_function=lambda x: {'color': 'tomato', 'fillOpacity': 0.1}).add_to(m_inicial)
+    m_inicial.fit_bounds(buffer_layer.get_bounds()); folium.LayerControl().add_to(m_inicial)
+    st_folium(m_inicial, key="mapa_inicial", use_container_width=True, height=400)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("Hojas MTN25 intersectadas", len(cuenca_results['hojas']))
+        df = pd.DataFrame({'ID': [h['numero'] for _, h in cuenca_results['hojas'].iterrows()]})
+        st.dataframe(df, height=200)
+        st.download_button("📥 Descargar Contorno Buffer (.zip)", export_gdf_to_zip(gpd.read_file(io.BytesIO(json.dumps(cuenca_results['buffer_gdf']).__geo_interface__)), "contorno_buffer"), "contorno_buffer.zip", use_container_width=True)
+    with col2:
+        fig, ax = plt.subplots(); dem_array = cuenca_results['dem_array'][0]
+        nodata = dem_array.min(); plot_array = np.where(dem_array == nodata, np.nan, dem_array)
+        im = ax.imshow(plot_array, cmap='terrain'); fig.colorbar(im, ax=ax, label='Elevación (m)'); ax.set_axis_off(); st.pyplot(fig)
+        st.download_button("📥 Descargar DEM Recortado (.tif)", cuenca_results['dem_bytes'], "dem_recortado.tif", "image/tiff", use_container_width=True)
+
+    # --- SECCIÓN DE ANÁLISIS INTERACTIVO ---
     st.divider()
     st.header("Análisis Hidrológico Interactivo")
     st.subheader("Paso 1: Seleccione un punto de salida (outlet)")
     
-    cuenca_results = st.session_state.cuenca_results
-    map_select = folium.Map(tiles="CartoDB positron")
-    buffer_layer = folium.GeoJson(cuenca_results['buffer_gdf'], name="Área de Análisis", style_function=lambda x: {'color': 'tomato', 'fillOpacity': 0.1}).add_to(map_select)
-    map_select.fit_bounds(buffer_layer.get_bounds())
-    
-    # RESTAURADO: Punto rojo de la Pestaña 1
+    map_select = folium.Map(tiles="CartoDB positron"); map_select.fit_bounds(buffer_layer.get_bounds())
     if st.session_state.get('lat_wgs84') and st.session_state.get('lon_wgs84'):
         folium.Marker([st.session_state.lat_wgs84, st.session_state.lon_wgs84], popup="Punto de Interés (Pestaña 1)", icon=folium.Icon(color="red", icon="info-sign")).add_to(map_select)
-    
     if st.session_state.get('precalculated_acc') is not None:
         bounds = cuenca_results['buffer_gdf'].total_bounds
         img = Image.fromarray(st.session_state.precalculated_acc)
         buffered = io.BytesIO(); img.save(buffered, format="PNG"); img_str = base64.b64encode(buffered.getvalue()).decode()
         folium.raster_layers.ImageOverlay(image=f"data:image/png;base64,{img_str}", bounds=[[bounds[1], bounds[0]], [bounds[3], bounds[2]]], opacity=0.6, name='Referencia de Cauces').add_to(map_select)
-    
     if st.session_state.get('outlet_coords'):
         folium.Marker([st.session_state.outlet_coords['lat'], st.session_state.outlet_coords['lng']], popup="Punto de Salida", icon=folium.Icon(color='orange')).add_to(map_select)
     
@@ -240,7 +241,7 @@ def render_dem25_tab():
     umbral_celdas = st.slider(label="Umbral de celdas para definir cauces", min_value=10, max_value=10000, value=1600, step=10)
     
     if st.button("🚀 Analizar Punto Seleccionado", use_container_width=True, type="primary", disabled=not st.session_state.get('outlet_coords')):
-        results = analisis_hidrologico_completo_pyflwdir(st.session_state.cuenca_results['dem_bytes'], st.session_state.outlet_coords, umbral_celdas)
+        results = analisis_hidrologico_pysheds_pyflwdir(st.session_state.cuenca_results['dem_bytes'], st.session_state.outlet_coords, umbral_celdas)
         if results['success']:
             st.session_state.analisis_results = results
             st.success("Análisis completado."); st.rerun()
@@ -270,12 +271,9 @@ def render_dem25_tab():
         m_col1, m_col2 = st.columns(2)
         with m_col1:
             st.metric("Área de la Cuenca", f"{res['metrics']['area_km2']:.4f} km²")
-            st.metric("Longitud LFP", f"{res['metrics']['lfp_metrics'].get('longitud_m', 0):.2f} m")
+            st.metric("Longitud LFP", f"{res['metrics']['lfp_longitud_m']:.2f} m")
         with m_col2:
             st.download_button("📥 Cuenca (.zip)", export_gdf_to_zip(gdf_cuenca, "cuenca"), "cuenca.zip", use_container_width=True)
             st.download_button("📥 LFP (.zip)", export_gdf_to_zip(gdf_lfp, "lfp"), "lfp.zip", use_container_width=True)
             st.download_button("📥 Punto de Salida (.zip)", export_gdf_to_zip(gdf_punto, "punto"), "punto.zip", use_container_width=True)
             st.download_button("📥 Red Fluvial (.zip)", export_gdf_to_zip(gdf_rios, "rios"), "rios.zip", use_container_width=True)
-
-        st.subheader("Gráficos de Análisis")
-        st.image(io.BytesIO(base64.b64decode(res['plots']['mosaico'])), caption="Características de la Cuenca", use_container_width=True)
