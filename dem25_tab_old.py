@@ -470,6 +470,8 @@ def export_gdf_to_zip(gdf, filename_base):
 @st.cache_data(show_spinner="Pre-calculando referencia de cauces (pyflwdir)...")
 def precalcular_acumulacion(_dem_bytes):
     try:
+        # Pyflwdir necesita un archivo local o bytes en memoria.
+        # Si _dem_bytes es una URL, lo descargamos a un MemoryFile.
         if isinstance(_dem_bytes, str) and _dem_bytes.startswith('http'):
             with requests.get(_dem_bytes, stream=True) as r:
                 r.raise_for_status()
@@ -483,24 +485,40 @@ def precalcular_acumulacion(_dem_bytes):
             nodata = src.meta.get('nodata')
             if nodata is not None: dem_array[dem_array == nodata] = np.nan
             transform = src.transform
-            
+        
         flwdir = pyflwdir.from_dem(data=dem_array, transform=transform, nodata=np.nan)
         acc = flwdir.upstream_area(unit='cell')
         acc_limpio = np.nan_to_num(acc, nan=0.0)
         acc_limpio = np.where(acc_limpio < 0, 0, acc_limpio)
 
-        # --- LÓGICA DE VISUALIZACIÓN BINARIA AÑADIDA ---
-        # Definimos un umbral para crear una matriz binaria (0 o 1)
-        umbral_acumulacion = 1000 # <-- Puedes cambiar este valor según necesites
-        acc_binary = (acc_limpio > umbral_acumulacion).astype(np.uint8)
-
-        # Devolvemos el objeto flwdir y la matriz binaria
-        return flwdir, acc_binary
-    
+        # Nuevo: Usar una transformación de potencia (corrección gamma) para aumentar el contraste
+        # y hacer los píxeles de los cauces más evidentes para la selección.
+        # Un exponente pequeño (ej. 0.2) realza los valores altos de acumulación,
+        # haciendo que los píxeles individuales de la red fluvial sean más nítidos.
+        power_factor = 0.2 # Valor recomendado para realce de contraste. Ajustar si es necesario (0.1 para más, 0.3 para menos).
+        scaled_acc_for_viz = acc_limpio ** power_factor # <-- Nueva línea para la transformación de potencia
+        
+        min_val, max_val = np.nanmin(scaled_acc_for_viz), np.nanmax(scaled_acc_for_viz) # <-- Usar la nueva variable aquí
+        
+        if max_val == min_val:
+            # Evitar división por cero si el ráster es plano
+            img_acc = np.zeros_like(scaled_acc_for_viz, dtype=np.uint8) # <-- Usar la nueva variable aquí
+        else:
+            # Normalizar los valores a un rango de 0-255 para crear una imagen en escala de grises
+            scaled_acc_nan_as_zero = np.nan_to_num(scaled_acc_for_viz, nan=min_val) # <-- Usar la nueva variable aquí
+            img_acc = (255 * (scaled_acc_nan_as_zero - min_val) / (max_val - min_val)).astype(np.uint8)
+        # log_acc = np.log1p(acc_limpio)
+        # min_val, max_val = np.nanmin(log_acc), np.nanmax(log_acc)
+        # if max_val == min_val:
+        #     img_acc = np.zeros_like(log_acc, dtype=np.uint8)
+        # else:
+        #     log_acc_nan_as_zero = np.nan_to_num(log_acc, nan=min_val)
+        #     img_acc = (255 * (log_acc_nan_as_zero - min_val) / (max_val - min_val)).astype(np.uint8)
+        return img_acc
     except Exception as e:
         st.error(f"Error en el pre-cálculo con pyflwdir: {e}")
         st.code(traceback.format_exc())
-        return None, None
+        return None
 
 # ==============================================================================
 # SECCIÓN 5: FUNCIÓN PRINCIPAL DEL FRONTEND (RENDERIZADO DE LA PESTAÑA)
@@ -540,7 +558,7 @@ def render_dem25_tab():
             st.session_state.cuenca_results = results
             st.session_state.processed_basin_id = st.session_state.basin_geojson
             # precalcular_acumulacion ahora recibe los bytes del DEM recortado, no la URL del DEM nacional
-            st.session_state.precalculated_acc, st.session_state.acc_binary_precalc = precalcular_acumulacion(results['dem_bytes']) 
+            st.session_state.precalculated_acc = precalcular_acumulacion(results['dem_bytes']) 
             st.session_state.pop('poligono_results', None)
             st.session_state.pop('user_drawn_geojson', None)
             st.session_state.pop('polygon_error_message', None)
@@ -646,40 +664,26 @@ def render_dem25_tab():
         folium.Marker([st.session_state.lat_wgs84, st.session_state.lon_wgs84], popup="Punto de Interés (Pestaña 1)", icon=folium.Icon(color="red", icon="info-sign")).add_to(map_select)
 
     if 'precalculated_acc' in st.session_state and st.session_state.precalculated_acc is not None:
-            # Definimos los límites del DEM para la capa de imagen
-            dem_bounds = st.session_state.cuenca_results['dem_bounds']
-            bounds = [[dem_bounds.bottom, dem_bounds.left], [dem_bounds.top, dem_bounds.right]]
-    
-            # Creamos un colormap de blanco y negro
-            blanco_negro_cmap = colors.ListedColormap(['black', 'white'])
-    
-            # Superponemos la imagen binaria directamente desde el array de numpy
-            # La opción 'pixelated=True' evita la interpolación y suavizado
-            umbral_acumulacion = 1000 # Necesitas definir el umbral aquí para el nombre de la capa
-            folium.raster_layers.ImageOverlay(
-                name=f"Referencia de Cauces (umbral > {umbral_acumulacion} celdas)",
-                image=st.session_state.acc_binary_precalc,
-                bounds=bounds,
-                opacity=0.6,
-                interactive=True,
-                cross_origin=False,
-                zindex=1,
-                colormap=blanco_negro_cmap,
-                pixelated=True
-            ).add_to(map_select)
+        acc_raster = st.session_state.precalculated_acc
+        bounds = buffer_gdf.total_bounds
+        img = Image.fromarray(acc_raster)
+        buffered = io.BytesIO()
+        img.save(buffered, format="PNG")
+        img_str = base64.b64encode(buffered.getvalue()).decode()
+        img_url = f"data:image/png;base64,{img_str}"
+        folium.raster_layers.ImageOverlay(image=img_url, bounds=[[bounds[1], bounds[0]], [bounds[3], bounds[2]]], opacity=0.6, pixelated=True, name='Referencia de Cauces (Acumulación)').add_to(map_select) # añadimos --> pixelated=True
 
     if 'outlet_coords' in st.session_state and st.session_state.outlet_coords is not None:
         coords = st.session_state.outlet_coords
         folium.Marker([coords['lat'], coords['lng']], popup="Punto de Salida Seleccionado", icon=folium.Icon(color='orange')).add_to(map_select)
     
     folium.LayerControl().add_to(map_select)
-    map_output = st_folium(m, key="situacion_map", use_container_width=True, height=800, returned_objects=['all_drawings', 'last_active_drawing'])
-    
-    # Procesar el dibujo cuando se complete
-    if map_output.get("last_active_drawing"):
-        st.session_state.user_drawn_geojson = json.dumps(map_output["last_active_drawing"]['geometry'])
-        st.session_state.drawing_mode_active = False
-        st.rerun()
+    map_output_select = st_folium(map_select, key="map_select", use_container_width=True, height=800, returned_objects=['last_clicked'])
+
+    if map_output_select.get("last_clicked"):
+        if st.session_state.get('outlet_coords') != map_output_select["last_clicked"]:
+            st.session_state.outlet_coords = map_output_select["last_clicked"]
+            st.rerun()
 
     # --- SECCIÓN DE CÁLCULO Y VISUALIZACIÓN (MODIFICADA PARA USAR LA FUNCIÓN DIRECTA) ---
     st.subheader("Paso 2: Cálculos GIS y Análisis de precisión")
