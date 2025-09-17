@@ -558,7 +558,7 @@ def render_dem25_tab():
             st.session_state.show_dem25_content = False
 
     # if not st.session_state.get('show_dem25_content') or not st.session_state.get('cuenca_results'):
-    #     st.stop()
+    #    st.stop()
 
     if not st.session_state.get('show_dem25_content') or not st.session_state.get('cuenca_results'):
         st.info("Seleccione un punto en el mapa y haga clic en 'Analizar Hojas y DEM para la Cuenca Actual' para empezar.") # <-- Nueva línea
@@ -582,7 +582,7 @@ def render_dem25_tab():
     map_output = st_folium(m, key="situacion_map", use_container_width=True, height=800, returned_objects=['all_drawings'])
     if st.session_state.get("drawing_mode_active") and map_output.get("all_drawings"):
         # Añadir un print para verificar el contenido
-        print(f"DEBUG: Dibujo completado. GeoJSON: {json.dumps(map_output['all_drawings'][0]['geometry'])}") # <-- Añadir este print        
+        print(f"DEBUG: Dibujo completado. GeoJSON: {json.dumps(map_output['all_drawings'][0]['geometry'])}") # <-- Añadir este print         
         st.session_state.user_drawn_geojson = json.dumps(map_output["all_drawings"][0]['geometry']); 
         st.session_state.drawing_mode_active = False; 
         st.rerun() # <-- Asegurarse de que este rerun esté presente
@@ -651,23 +651,23 @@ def render_dem25_tab():
         folium.Marker([st.session_state.lat_wgs84, st.session_state.lon_wgs84], popup="Punto de Interés (Pestaña 1)", icon=folium.Icon(color="red", icon="info-sign")).add_to(map_select)
 
     if 'acc_binary_precalc' in st.session_state and st.session_state.acc_binary_precalc is not None:
-            dem_bounds = st.session_state.cuenca_results['dem_bounds']
-            bounds = [[dem_bounds.bottom, dem_bounds.left], [dem_bounds.top, dem_bounds.right]]
+        dem_bounds = st.session_state.cuenca_results['dem_bounds']
+        bounds = [[dem_bounds.bottom, dem_bounds.left], [dem_bounds.top, dem_bounds.right]]
     
-            blanco_negro_cmap = colors.ListedColormap(['black', 'white'])
+        blanco_negro_cmap = colors.ListedColormap(['black', 'white'])
     
-            umbral_acumulacion = 1000 # Necesitas definir el umbral aquí para el nombre de la capa
-            folium.raster_layers.ImageOverlay(
-                name=f"Referencia de Cauces (umbral > {umbral_acumulacion} celdas)",
-                image=st.session_state.acc_binary_precalc,
-                bounds=bounds,
-                opacity=0.6,
-                interactive=True,
-                cross_origin=False,
-                zindex=1,
-                colormap=blanco_negro_cmap,
-                pixelated=True
-            ).add_to(map_select)
+        umbral_acumulacion = 1000 # Necesitas definir el umbral aquí para el nombre de la capa
+        folium.raster_layers.ImageOverlay(
+            name=f"Referencia de Cauces (umbral > {umbral_acumulacion} celdas)",
+            image=st.session_state.acc_binary_precalc,
+            bounds=bounds,
+            opacity=0.6,
+            interactive=True,
+            cross_origin=False,
+            zindex=1,
+            colormap=blanco_negro_cmap,
+            pixelated=True
+        ).add_to(map_select)
 
     if 'outlet_coords' in st.session_state and st.session_state.outlet_coords is not None:
         coords = st.session_state.outlet_coords
