@@ -221,25 +221,25 @@ def export_gdf_to_zip(gdf, filename_base):
 #         st.code(traceback.format_exc()) # Muestra más detalles del error
 #         return None
 def precalcular_acumulacion(_dem_bytes):
-    # --- PROCESO EXISTENTE ---
     try:
-        grid = Grid.from_dem(_dem_bytes, data_name="dem", cellsize=25.0)
+        # Usamos rasterio para leer los datos del DEM desde los bytes en memoria
+        with rasterio.open(io.BytesIO(_dem_bytes)) as src:
+            dem_array = src.read(1)
+            dem_meta = src.meta
+
+        # Ahora creamos el objeto Grid de pysheds directamente desde el array de numpy
+        grid = Grid(dem_array, data_name="dem", nodata=dem_meta['nodata'], cellsize=dem_meta['transform'][0])
         dem = grid.dem
         dirmap = (64, 128, 1, 2, 4, 8, 16, 32)
         flwdir = pyflwdir.from_width(
             grid.dem, 25.0,
             ftype="d8",
             latlon=False,
-            # enforce_edgeflow=False # Opción desactivada para evitar problemas en bordes de DEM
         )
         acc = flwdir.upstream_area(unit='cell')
 
-        # --- LÓGICA AGREGADA ---
-        # 1. Definir el umbral de acumulación. Cambia este valor según tu necesidad.
-        umbral_acumulacion = 1000 
-        
-        # 2. Crear la matriz binaria para los píxeles (0 o 1)
-        # Convertimos a np.uint8 para asegurar los tipos de datos correctos para la visualización
+        # --- Lógica agregada para crear la matriz binaria ---
+        umbral_acumulacion = 1000
         acc_binary = (acc > umbral_acumulacion).astype(np.uint8)
 
         # La función ahora devuelve una tupla con ambos objetos
@@ -248,7 +248,6 @@ def precalcular_acumulacion(_dem_bytes):
     except Exception as e:
         st.error(f"Error en el pre-cálculo de acumulación: {e}")
         return None, None
-
 
 # ==============================================================================
 # SECCIÓN 4: LÓGICA DE ANÁLISIS HIDROLÓGICO
