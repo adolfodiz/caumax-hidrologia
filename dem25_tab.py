@@ -77,9 +77,7 @@ def procesar_datos_cuenca(basin_geojson_str):
             print("LOG: Iniciando operación de recorte del DEM (rasterio.mask)...")
       
             dem_recortado, trans_recortado = mask(dataset=src, shapes=geom_recorte_gdf.geometry, crop=True, nodata=src.nodata or -32768)
-            # El GeoTransform es una tupla (top_left_x, pixel_width, rotation_x, top_left_y, rotation_y, pixel_height)
-            # pixel_width es trans_recortado[1] y pixel_height es trans_recortado[5]
-            print(f"DEBUG: generar_dem - Operación de recorte del DEM finalizada. Resolución de píxel: {trans_recortado[1]}x{abs(trans_recortado[5])}. Shape: {dem_recortado.shape}") # <-- Print corregido
+            print(f"DEBUG: generar_dem - Operación de recorte del DEM finalizada. Resolución de píxel: {trans_recortado[1]}x{abs(trans_recortado[5])}. Shape: {dem_recortado.shape}")
             
             meta = src.meta.copy(); 
             meta.update({"driver": "GTiff", "height": dem_recortado.shape[1], "width": dem_recortado.shape[2], "transform": trans_recortado, "compress": "NONE"})            
@@ -122,13 +120,12 @@ def procesar_datos_poligono(polygon_geojson_str):
         geom_para_interseccion = poly_gdf.to_crs(hojas_gdf.crs)
         hojas = gpd.sjoin(hojas_gdf, geom_para_interseccion, how="inner", predicate="intersects").drop_duplicates(subset=['numero'])
         
-        # --- ¡CRÍTICO! Abrimos el DEM Nacional (COG) directamente desde la URL con rasterio ---
         print(f"LOG: Abriendo DEM Nacional (COG) directamente desde URL: {DEM_NACIONAL_PATH} para polígono...")
         with rasterio.open(DEM_NACIONAL_PATH) as src:
             geom_recorte_gdf = poly_gdf.to_crs(src.crs)
             dem_recortado, trans_recortado = mask(dataset=src, shapes=geom_recorte_gdf.geometry, crop=True, nodata=src.nodata or -32768)
             meta = src.meta.copy()
-            meta.update({"driver": "GTiff", "height": dem_recortado.shape[1], "width": dem_recortado.shape[2], "transform": trans_recortado, "compress": "NONE"}) # <-- Añadir "compress": "NONE"
+            meta.update({"driver": "GTiff", "height": dem_recortado.shape[1], "width": dem_recortado.shape[2], "transform": trans_recortado, "compress": "NONE"})
             with io.BytesIO() as buffer:
                 with rasterio.open(buffer, 'w', **meta) as dst:
                     dst.write(dem_recortado)
@@ -163,15 +160,7 @@ def export_gdf_to_zip(gdf, filename_base):
 @st.cache_data(show_spinner="Pre-calculando referencia de cauces (pyflwdir)...")
 def precalcular_acumulacion(_dem_bytes):
     try:
-        # Pyflwdir necesita un archivo local o bytes en memoria.
-        # Si _dem_bytes es una URL, lo descargamos a un MemoryFile.
-        if isinstance(_dem_bytes, str) and _dem_bytes.startswith('http'):
-            with requests.get(_dem_bytes, stream=True) as r:
-                r.raise_for_status()
-                dem_bytes_content = r.content
-            memfile = rasterio.io.MemoryFile(dem_bytes_content)
-        else:
-            memfile = rasterio.io.MemoryFile(_dem_bytes)
+        memfile = rasterio.io.MemoryFile(_dem_bytes)
 
         with memfile.open() as src:
             dem_array = src.read(1).astype(np.float32)
@@ -183,30 +172,18 @@ def precalcular_acumulacion(_dem_bytes):
         acc = flwdir.upstream_area(unit='cell')
         acc_limpio = np.nan_to_num(acc, nan=0.0)
         acc_limpio = np.where(acc_limpio < 0, 0, acc_limpio)
-
-        # Nuevo: Usar una transformación de potencia (corrección gamma) para aumentar el contraste
-        # y hacer los píxeles de los cauces más evidentes para la selección.
-        # Un exponente pequeño (ej. 0.2) realza los valores altos de acumulación,
-        # haciendo que los píxeles individuales de la red fluvial sean más nítidos.
-        power_factor = 0.2 # Valor recomendado para realce de contraste. Ajustar si es necesario (0.1 para más, 0.3 para menos).
-        scaled_acc_for_viz = acc_limpio ** power_factor # <-- Nueva línea para la transformación de potencia
         
-        min_val, max_val = np.nanmin(scaled_acc_for_viz), np.nanmax(scaled_acc_for_viz) # <-- Usar la nueva variable aquí
+        power_factor = 0.2
+        scaled_acc_for_viz = acc_limpio ** power_factor
+        
+        min_val, max_val = np.nanmin(scaled_acc_for_viz), np.nanmax(scaled_acc_for_viz)
         
         if max_val == min_val:
-            # Evitar división por cero si el ráster es plano
-            img_acc = np.zeros_like(scaled_acc_for_viz, dtype=np.uint8) # <-- Usar la nueva variable aquí
+            img_acc = np.zeros_like(scaled_acc_for_viz, dtype=np.uint8)
         else:
-            # Normalizar los valores a un rango de 0-255 para crear una imagen en escala de grises
-            scaled_acc_nan_as_zero = np.nan_to_num(scaled_acc_for_viz, nan=min_val) # <-- Usar la nueva variable aquí
+            scaled_acc_nan_as_zero = np.nan_to_num(scaled_acc_for_viz, nan=min_val)
             img_acc = (255 * (scaled_acc_nan_as_zero - min_val) / (max_val - min_val)).astype(np.uint8)
-        # log_acc = np.log1p(acc_limpio)
-        # min_val, max_val = np.nanmin(log_acc), np.nanmax(log_acc)
-        # if max_val == min_val:
-        #     img_acc = np.zeros_like(log_acc, dtype=np.uint8)
-        # else:
-        #     log_acc_nan_as_zero = np.nan_to_num(log_acc, nan=min_val)
-        #     img_acc = (255 * (log_acc_nan_as_zero - min_val) / (max_val - min_val)).astype(np.uint8)
+        
         return img_acc
     except Exception as e:
         st.error(f"Error en el pre-cálculo con pyflwdir: {e}")
@@ -224,51 +201,41 @@ def fig_to_base64(fig):
 
     
 def realizar_analisis_hidrologico_directo(dem_url, outlet_coords_wgs84, umbral_rio_export):
-    """
-    Ejecuta el flujo de trabajo hidrológico completo directamente en la aplicación.
-    Ahora lee el DEM directamente desde la URL.
-    """
     results = {
         "success": False, "message": "", "plots": {}, "downloads": {},
         "lfp_metrics": {}, "hypsometric_data": {}, "lfp_profile_data": {}
     }
+    dem_path_for_pysheds = None # Inicializar fuera del try
     try:
-        if dem_url is None: # Comprobación de seguridad
+        if dem_url is None:
             results['message'] = "Error: El DEM de entrada para el análisis hidrológico es None."
-            print("ERROR: realizar_analisis_hidrologico_directo - dem_url es None.")
             return results
 
         with rasterio.io.MemoryFile(dem_url) as memfile:
             with memfile.open() as src_global:
-                print(f"DEBUG: realizar_analisis_hidrologico_directo - DEM global abierto desde MemoryFile. CRS: {src_global.crs}, Bounds: {src_global.bounds}") # <-- Añadir bounds
+                print(f"DEBUG: DEM global abierto. CRS: {src_global.crs}, Bounds: {src_global.bounds}")
                 
                 transformer_wgs84_to_dem_crs = Transformer.from_crs("EPSG:4326", src_global.crs, always_xy=True)
                 x_dem_crs, y_dem_crs = transformer_wgs84_to_dem_crs.transform(outlet_coords_wgs84['lng'], outlet_coords_wgs84['lat'])
-                print(f"DEBUG: realizar_analisis_hidrologico_directo - Outlet UTM: ({x_dem_crs}, {y_dem_crs})") # <-- Nuevo print
+                print(f"DEBUG: Outlet en CRS del DEM: ({x_dem_crs}, {y_dem_crs})")
 
-                buffer_size_for_pysheds = 5000
-                bbox_utm = (x_dem_crs - buffer_size_for_pysheds, y_dem_crs - buffer_size_for_pysheds,
-                            x_dem_crs + buffer_size_for_pysheds, y_dem_crs + buffer_size_for_pysheds)
-                print(f"DEBUG: realizar_analisis_hidrologico_directo - BBox para recorte PySheds: {bbox_utm}") # <-- Nuevo print
+                # ### FIX 2: VALIDACIÓN DE LÍMITES ###
+                # Se comprueba si el punto está dentro del DEM antes de continuar.
+                src_bounds = src_global.bounds
+                if not (src_bounds.left <= x_dem_crs <= src_bounds.right and src_bounds.bottom <= y_dem_crs <= src_bounds.top):
+                    results['message'] = "Error: El punto de desagüe seleccionado está fuera de los límites del área del DEM. Por favor, seleccione un punto dentro del área de la cuenca y su buffer."
+                    print(f"ERROR: Punto ({x_dem_crs}, {y_dem_crs}) fuera de los límites del DEM {src_bounds}")
+                    return results
 
-                # --- Verificar si el bbox está dentro de src_global.bounds ---
-                # src_global.bounds es un BoundingBox, no un objeto Shapely.
-                # Convertimos ambos a objetos Polygon para usar 'intersects'.
-                # src_global_polygon = Polygon.from_bounds(*src_global.bounds) # <-- Comentado
-                # bbox_utm_polygon = Polygon.from_bounds(*bbox_utm) # <-- Comentado
-
-                # if not src_global_polygon.intersects(bbox_utm_polygon): # <-- Comentado
-                #     results['message'] = "Error: El punto de desagüe y su buffer están fuera del DEM recortado de la cuenca. Intente un punto más central."
-                #     print(f"ERROR: realizar_analisis_hidrologico_directo - BBox de PySheds fuera de los límites del DEM global. src_global.bounds: {src_global.bounds}")
-                #     return results
+                bbox_utm = (x_dem_crs - BUFFER_METROS, y_dem_crs - BUFFER_METROS,
+                            x_dem_crs + BUFFER_METROS, y_dem_crs + BUFFER_METROS)
+                print(f"DEBUG: BBox para recorte de PySheds: {bbox_utm}")
 
                 out_image, out_transform = mask(src_global, [Polygon.from_bounds(*bbox_utm)], crop=True, nodata=src_global.nodata)
-                print(f"DEBUG: realizar_analisis_hidrologico_directo - out_image.shape después de mask: {out_image.shape}") # <-- Nuevo print
-                print(f"DEBUG: realizar_analisis_hidrologico_directo - out_transform después de mask: {out_transform}") # <-- Nuevo print
                 
-                if out_image.size == 0 or out_image.shape[1] == 0 or out_image.shape[2] == 0: # <-- Nueva comprobación
-                    results['message'] = "Error: El recorte del DEM para PySheds resultó en una imagen vacía o inválida."
-                    print(f"ERROR: realizar_analisis_hidrologico_directo - out_image está vacío o inválido: {out_image.shape}") # <-- Nuevo print
+                if out_image.size == 0 or out_image.shape[1] == 0 or out_image.shape[2] == 0:
+                    results['message'] = "Error: El recorte del DEM para el análisis resultó en una imagen vacía. Esto puede suceder si el punto de desagüe está demasiado cerca del borde. Intente con un punto más central."
+                    print(f"ERROR: out_image está vacío o inválido: {out_image.shape}")
                     return results
 
                 out_meta = src_global.meta.copy()
@@ -278,42 +245,29 @@ def realizar_analisis_hidrologico_directo(dem_url, outlet_coords_wgs84, umbral_r
                     with rasterio.open(tmp_dem_pysheds.name, 'w', **out_meta) as dst:
                         dst.write(out_image)
                     dem_path_for_pysheds = tmp_dem_pysheds.name
-                print(f"DEBUG: realizar_analisis_hidrologico_directo - DEM temporal para PySheds guardado en: {dem_path_for_pysheds}") # <-- Nuevo print
+                print(f"DEBUG: DEM temporal para PySheds guardado en: {dem_path_for_pysheds}")
 
-        # --- PASO 2: PROCESAMIENTO HIDROLÓGICO CON PYSHEDS (CÓDIGO ORIGINAL) ---
         no_data_value = out_meta.get('nodata', -32768)
-        print(f"DEBUG: realizar_analisis_hidrologico_directo - Iniciando Grid.from_raster con {dem_path_for_pysheds}") # <-- Nuevo print
+        print(f"DEBUG: Iniciando Grid.from_raster con {dem_path_for_pysheds}")
         grid = Grid.from_raster(dem_path_for_pysheds, nodata=no_data_value)
-        print(f"DEBUG: realizar_analisis_hidrologico_directo - Grid creado. Extent: {grid.extent}") # <-- Nuevo print
         dem = grid.read_raster(dem_path_for_pysheds, nodata=no_data_value)
-        print(f"DEBUG: realizar_analisis_hidrologico_directo - DEM leído por Grid. Shape: {dem.shape}") # <-- Nuevo print
-
-        # Ajustamos las coordenadas del punto de salida al nuevo DEM recortado
-        x_snap, y_snap = grid.snap_to_mask(grid.accumulation(grid.flowdir(grid.fill_depressions(grid.fill_pits(dem)))) > umbral_rio_export, (x_dem_crs, y_dem_crs))
         
-        # Si el punto de snap está fuera del DEM recortado, ajustamos.
-        if not (grid.extent[0] <= x_snap <= grid.extent[1] and grid.extent[2] <= y_snap <= grid.extent[3]):
-            results['message'] = "El punto de desagüe se encuentra demasiado cerca del borde del DEM recortado para el análisis. Intente un punto más central."
-            return results
-
         pit_filled_dem = grid.fill_pits(dem)
         flooded_dem = grid.fill_depressions(pit_filled_dem)
         conditioned_dem = grid.resolve_flats(flooded_dem)
         flowdir = grid.flowdir(conditioned_dem)
         acc = grid.accumulation(flowdir)
         
-        # Re-snap al DEM recortado
         x_snap, y_snap = grid.snap_to_mask(acc > umbral_rio_export, (x_dem_crs, y_dem_crs))
+        
+        if not (grid.extent[0] <= x_snap <= grid.extent[1] and grid.extent[2] <= y_snap <= grid.extent[3]):
+            results['message'] = "El punto de desagüe se encuentra demasiado cerca del borde del área de análisis. Intente un punto más central."
+            return results
+
         catch = grid.catchment(x=x_snap, y=y_snap, fdir=flowdir, xytype="coordinate")
-
-        # --- PASO 3: INICIALIZACIÓN DE PYFLWDIR (CÓDIGO ORIGINAL) ---
-        # PyFlwdir también puede abrir el DEM recortado
-        flw = pyflwdir.from_dem(data=out_image[0], nodata=no_data_value, transform=out_transform, latlon=False)
-        upa = flw.upstream_area(unit='cell')
-
-        # --- PASO 4: GENERACIÓN DE GRÁFICOS Y MÉTRICAS (CÓDIGO ORIGINAL) ---
-        # Asegúrate de que las llamadas a imshow y plot usen 'grid_para_plot.extent' o 'grid.extent'
-        # y que los datos de elevación sean 'conditioned_dem' o 'dem_data' según corresponda.
+        
+        grid.clip_to(catch)
+        conditioned_dem_clipped = grid.view(conditioned_dem, nodata=np.nan)
 
         # GRÁFICO 1: MOSAICO DE CARACTERÍSTICAS
         grid_para_plot = Grid.from_raster(dem_path_for_pysheds, nodata=no_data_value)
@@ -484,31 +438,21 @@ def realizar_analisis_hidrologico_directo(dem_url, outlet_coords_wgs84, umbral_r
         results['success'] = True
         results['message'] = "Cálculo completado con éxito directamente desde la aplicación."
 
-    # except Exception as e:
-    #     results['message'] = f"Error en el análisis hidrológico directo: {traceback.format_exc()}"
-    #     results['success'] = False
-    # finally:
-    #     # Aseguramos que el archivo temporal de PySheds se elimine
-    #     if 'dem_path_for_pysheds' in locals() and os.path.exists(dem_path_for_pysheds):
-    #         os.remove(dem_path_for_pysheds)
-    # 
-    # return results
-
-
+    # ### FIX 1: RESTAURACIÓN DEL BLOQUE TRY-EXCEPT ###
+    # Este bloque es VITAL. Capturará cualquier error durante el proceso 
+    # y lo mostrará al usuario en lugar de colgar la aplicación.
     except Exception as e:
-        # Aseguramos que 'results' sea un diccionario antes de intentar asignarle un mensaje
         if not isinstance(results, dict):
-            results = {"success": False} # Re-inicializar si no es un dict
+            results = {"success": False}
         
-        results['message'] = f"Error en el análisis hidrológico directo: {e}\n{traceback.format_exc()}"
+        error_message = f"Se produjo un error inesperado durante el análisis hidrológico.\n\nDETALLES TÉCNICOS:\n{traceback.format_exc()}"
+        results['message'] = error_message
         results['success'] = False
         print(f"ERROR: realizar_analisis_hidrologico_directo - Error general capturado: {e}")
         print(traceback.format_exc())
     finally:
-        # Aseguramos que el archivo temporal de PySheds se elimine
-        # dem_path_for_pysheds solo se define si el bloque try se ejecuta hasta cierto punto.
-        # Es más seguro verificar si existe en locals() antes de intentar eliminarlo.
-        if 'dem_path_for_pysheds' in locals() and os.path.exists(dem_path_for_pysheds):
+        # Se asegura de que el archivo temporal siempre se elimine
+        if dem_path_for_pysheds and os.path.exists(dem_path_for_pysheds):
             try:
                 os.remove(dem_path_for_pysheds)
                 print(f"DEBUG: Archivo temporal eliminado: {dem_path_for_pysheds}")
@@ -524,58 +468,96 @@ def realizar_analisis_hidrologico_directo(dem_url, outlet_coords_wgs84, umbral_r
 # ==============================================================================
 
 def render_dem25_tab():
-    st.header("Generador de Modelos Digitales del Terreno (MDT25)"); st.subheader("(from NASA’s Earth Observing System Data and Information System -EOSDIS)")
+    st.header("Generador de Modelos Digitales del Terreno (MDT25)")
+    st.subheader("(from NASA’s Earth Observing System Data and Information System -EOSDIS)")
+    
     st.info("Esta herramienta identifica las hojas del MTN25 y genera un DEM recortado para la cuenca (con buffer de 5km) o para un área dibujada manualmente.")
 
-    if 'basin_geojson' not in st.session_state: st.warning("⬅️ Por favor, primero calcule una cuenca en la Pestaña 1."); st.stop()
+    if not st.session_state.get('basin_geojson'):
+        st.warning("⬅️ Por favor, primero calcule una cuenca en la Pestaña 1.")
+        st.stop()
 
     if st.button("🗺️ Analizar Hojas y DEM para la Cuenca Actual", use_container_width=True):
+        try:
+            temp_cuenca_gdf = gpd.read_file(st.session_state.basin_geojson).set_crs("EPSG:4326")
+            area_km2 = temp_cuenca_gdf.to_crs("EPSG:25830").area.sum() / 1_000_000
+            if area_km2 > AREA_PROCESSING_LIMIT_KM2:
+                st.error(f"El área de la cuenca calculada ({area_km2:,.0f} km²) es demasiado grande. Límite: {AREA_PROCESSING_LIMIT_KM2:,.0f} km².")
+                st.stop() 
+        except Exception as e:
+            st.error(f"No se pudo verificar el área de la cuenca: {e}")
+            st.stop()
+
+        with st.spinner("Procesando recorte del DEM... Esta operación puede tardar varios segundos. Por favor, espere."):
             results = procesar_datos_cuenca(st.session_state.basin_geojson)
-            if results:
-                st.session_state.cuenca_results = results
-                st.session_state.processed_basin_id = st.session_state.basin_geojson
-                st.session_state.precalculated_acc = precalcular_acumulacion(results['dem_bytes'])
-                
-                # Limpiamos los resultados de análisis anteriores, pero NADA MÁS
-                st.session_state.pop('poligono_results', None)
-                st.session_state.pop('user_drawn_geojson', None)
-                st.session_state.pop('polygon_error_message', None)
-                st.session_state.pop('hidro_results_externo', None) # Usamos la nueva clave de resultados
-                # La línea que borraba 'outlet_coords' ha sido eliminada de aquí.
-                
-            else: 
-                st.error("No se pudo procesar la cuenca.")
-                
+        
+        if results:
+            st.session_state.cuenca_results = results
+            st.session_state.processed_basin_id = st.session_state.basin_geojson
+            st.session_state.precalculated_acc = precalcular_acumulacion(results['dem_bytes']) 
+            st.session_state.pop('poligono_results', None)
+            st.session_state.pop('user_drawn_geojson', None)
+            st.session_state.pop('polygon_error_message', None)
+            st.session_state.pop('hidro_results_externo', None)
             st.session_state.show_dem25_content = True
             st.rerun()
+        else:
+            st.error("No se pudo procesar la cuenca. La operación falló o superó el tiempo de espera. Revisa los logs del servidor para más detalles.")
+            st.session_state.show_dem25_content = False
 
-    if not st.session_state.get('show_dem25_content'): st.stop()
-    
+    if not st.session_state.get('show_dem25_content') or not st.session_state.get('cuenca_results'):
+        st.info("Seleccione un punto en el mapa y haga clic en 'Analizar Hojas y DEM para la Cuenca Actual' para empezar.")
+        return
+
     st.subheader("Mapa de Situación")
-    m = folium.Map(tiles="CartoDB positron"); folium.TileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', attr='Esri', name='Imágenes Satélite').add_to(m)
+    m = folium.Map(tiles="CartoDB positron", zoom_start=10)
+    folium.TileLayer('OpenStreetMap').add_to(m)
+    folium.TileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', attr='Esri', name='Imágenes Satélite').add_to(m)
     cuenca_results = st.session_state.cuenca_results
     folium.GeoJson(cuenca_results['cuenca_gdf'], name="Cuenca", style_function=lambda x: {'color': 'white', 'weight': 2.5}).add_to(m)
     buffer_layer = folium.GeoJson(cuenca_results['buffer_gdf'], name="Buffer Cuenca (5km)", style_function=lambda x: {'color': 'tomato', 'fillOpacity': 0.1}).add_to(m)
     folium.GeoJson(cuenca_results['hojas'], name="Hojas (Cuenca)", style_function=lambda x: {'color': '#ffc107', 'weight': 2, 'fillOpacity': 0.4}).add_to(m)
     m.fit_bounds(buffer_layer.get_bounds())
+    
     if st.session_state.get('user_drawn_geojson'): folium.GeoJson(json.loads(st.session_state.user_drawn_geojson), name="Polígono Dibujado", style_function=lambda x: {'color': 'magenta', 'weight': 3, 'fillOpacity': 0.2, 'dashArray': '5, 5'}).add_to(m)
     if 'poligono_results' in st.session_state and "error" not in st.session_state.poligono_results: folium.GeoJson(st.session_state.poligono_results['hojas'], name="Hojas (Polígono)", style_function=lambda x: {'color': 'magenta', 'weight': 2.5, 'fillOpacity': 0.5}).add_to(m)
-    if st.session_state.get("drawing_mode_active"): Draw(export=True, filename='data.geojson', position='topleft', draw_options={'polyline': False, 'rectangle': False, 'circle': False, 'marker': False, 'circlemarker': False, 'polygon': {'shapeOptions': {'color': 'magenta', 'weight': 3, 'fillOpacity': 0.2}}}, edit_options={'edit': False}).add_to(m)
+    
+    # Activar siempre el plugin de dibujo si se ha iniciado el modo
+    if st.session_state.get("drawing_mode_active"): 
+        Draw(export=True, filename='data.geojson', position='topleft', draw_options={'polyline': False, 'rectangle': False, 'circle': False, 'marker': False, 'circlemarker': False, 'polygon': {'shapeOptions': {'color': 'magenta', 'weight': 3, 'fillOpacity': 0.2}}}, edit_options={'edit': False}).add_to(m)
+    
     folium.LayerControl().add_to(m)
     map_output = st_folium(m, use_container_width=True, height=800, returned_objects=['all_drawings'])
+    
+    # Procesar el dibujo cuando se complete
     if st.session_state.get("drawing_mode_active") and map_output.get("all_drawings"):
-        st.session_state.user_drawn_geojson = json.dumps(map_output["all_drawings"][0]['geometry']); st.session_state.drawing_mode_active = False; st.rerun()
+        st.session_state.user_drawn_geojson = json.dumps(map_output["all_drawings"][0]['geometry'])
+        st.session_state.drawing_mode_active = False
+        st.rerun()
 
     with st.expander("📝 Herramientas de Dibujo para un área personalizada"):
+        st.info("Para dibujar: 1. Inicie el dibujo. 2. Haga clic en el mapa para añadir puntos. 3. Para cerrar el polígono, haga clic en el primer punto. 4. **MUY IMPORTANTE**: Haga clic en 'Finish' en la barra de herramientas del mapa.")
         c1, c2, c3 = st.columns([2, 2, 3])
         if c1.button("Iniciar / Reiniciar Dibujo", use_container_width=True): 
-            st.session_state.drawing_mode_active = True; st.session_state.pop('user_drawn_geojson', None); st.session_state.pop('poligono_results', None); st.session_state.pop('polygon_error_message', None); st.rerun()
-        if c2.button("Cancelar Dibujo", use_container_width=True): st.session_state.drawing_mode_active = False; st.rerun()
+            st.session_state.drawing_mode_active = True
+            st.session_state.pop('user_drawn_geojson', None)
+            st.session_state.pop('poligono_results', None)
+            st.session_state.pop('polygon_error_message', None)
+            st.rerun()
+        if c2.button("Cancelar Dibujo", use_container_width=True): 
+            st.session_state.drawing_mode_active = False
+            st.rerun()
+        
+        # El botón de análisis ahora depende de si se ha guardado un GeoJSON
         if st.session_state.get('user_drawn_geojson'):
-            if c3.button("▶️ Analizar Polígono Dibujado", use_container_width=True):
+            if c3.button("▶️ Analizar Polígono Dibujado", use_container_width=True, type="primary"):
                 results = procesar_datos_poligono(st.session_state.user_drawn_geojson)
-                if "error" in results: st.session_state.polygon_error_message = results["error"]; st.session_state.pop('poligono_results', None)
-                else: st.session_state.poligono_results = results; st.session_state.pop('polygon_error_message', None)
+                if "error" in results: 
+                    st.session_state.polygon_error_message = results["error"]
+                    st.session_state.pop('poligono_results', None)
+                else: 
+                    st.session_state.poligono_results = results
+                    st.session_state.pop('polygon_error_message', None)
                 st.rerun()
 
     if st.session_state.get('polygon_error_message'):
