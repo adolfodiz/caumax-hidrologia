@@ -537,8 +537,16 @@ def render_dem25_tab():
         if results:
             st.session_state.cuenca_results = results
             st.session_state.processed_basin_id = st.session_state.basin_geojson
-            # precalcular_acumulacion ahora recibe los bytes del DEM recortado, no la URL del DEM nacional
             st.session_state.flwdir_25m, st.session_state.acc_binary_precalc = precalcular_acumulacion(results['dem_bytes'])
+            
+            # --- AÑADIR ESTE BLOQUE ---
+            # Aseguramos que los límites del DEM se guardan para la visualización del mapa.
+            # Esto previene el KeyError: 'dem_bounds'.
+            with rasterio.open(io.BytesIO(results['dem_bytes'])) as src:
+                bounds = src.bounds
+                st.session_state.cuenca_results['dem_bounds'] = bounds
+            # ---------------------------
+    
             st.session_state.pop('poligono_results', None)
             st.session_state.pop('user_drawn_geojson', None)
             st.session_state.pop('polygon_error_message', None)
@@ -555,7 +563,6 @@ def render_dem25_tab():
     if not st.session_state.get('show_dem25_content') or not st.session_state.get('cuenca_results'):
         st.info("Seleccione un punto en el mapa y haga clic en 'Analizar Hojas y DEM para la Cuenca Actual' para empezar.") # <-- Nueva línea
         return # <-- Reemplaza st.stop()
-
     
     st.subheader("Mapa de Situación")
     m = folium.Map(tiles="CartoDB positron", zoom_start=10) # Añadido zoom_start para mejor visualización inicial
