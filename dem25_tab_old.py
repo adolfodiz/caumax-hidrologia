@@ -56,7 +56,6 @@ def fig_to_base64(fig):
     plt.close(fig)
     return base64.b64encode(buf.getvalue()).decode('utf-8')
 
-    
 def realizar_analisis_hidrologico_directo(dem_url, outlet_coords_wgs84, umbral_rio_export):
     """
     Ejecuta el flujo de trabajo hidrológico completo directamente en la aplicación.
@@ -66,6 +65,9 @@ def realizar_analisis_hidrologico_directo(dem_url, outlet_coords_wgs84, umbral_r
         "success": False, "message": "", "plots": {}, "downloads": {},
         "lfp_metrics": {}, "hypsometric_data": {}, "lfp_profile_data": {}
     }
+    
+def realizar_analisis_hidrologico_directo(dem_url, outlet_coords_wgs84, umbral_rio_export):
+    results = { ... }
     try:
         if dem_url is None: # Comprobación de seguridad
             results['message'] = "Error: El DEM de entrada para el análisis hidrológico es None."
