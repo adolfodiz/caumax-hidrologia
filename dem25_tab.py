@@ -468,7 +468,7 @@ def export_gdf_to_zip(gdf, filename_base):
         zip_io.seek(0)
         return zip_io
 
-@st.cache_data(show_spinner="Pre-calculando referencia de cauces (pyflwdir)...")
+@st.cache_resource(show_spinner="Pre-calculando referencia de cauces...")
 def precalcular_acumulacion(_dem_bytes):
     try:
         if isinstance(_dem_bytes, str) and _dem_bytes.startswith('http'):
@@ -490,19 +490,16 @@ def precalcular_acumulacion(_dem_bytes):
         acc_limpio = np.nan_to_num(acc, nan=0.0)
         acc_limpio = np.where(acc_limpio < 0, 0, acc_limpio)
 
-        # --- LÓGICA DE VISUALIZACIÓN BINARIA AÑADIDA ---
-        # Definimos un umbral para crear una matriz binaria (0 o 1)
-        umbral_acumulacion = 1000 # <-- Puedes cambiar este valor según necesites
+        umbral_acumulacion = 1000 
         acc_binary = (acc_limpio > umbral_acumulacion).astype(np.uint8)
 
-        # Devolvemos el objeto flwdir y la matriz binaria
+        # Devolvemos ambos objetos, ahora que el caché puede manejarlos
         return flwdir, acc_binary
     
     except Exception as e:
         st.error(f"Error en el pre-cálculo con pyflwdir: {e}")
         st.code(traceback.format_exc())
         return None, None
-
 # ==============================================================================
 # SECCIÓN 5: FUNCIÓN PRINCIPAL DEL FRONTEND (RENDERIZADO DE LA PESTAÑA)
 # ==============================================================================
@@ -541,7 +538,7 @@ def render_dem25_tab():
             st.session_state.cuenca_results = results
             st.session_state.processed_basin_id = st.session_state.basin_geojson
             # precalcular_acumulacion ahora recibe los bytes del DEM recortado, no la URL del DEM nacional
-            st.session_state.precalculated_acc, st.session_state.acc_binary_precalc = precalcular_acumulacion(results['dem_bytes']) 
+            st.session_state.flwdir_25m, st.session_state.acc_binary_precalc = precalcular_acumulacion(results['dem_bytes'])
             st.session_state.pop('poligono_results', None)
             st.session_state.pop('user_drawn_geojson', None)
             st.session_state.pop('polygon_error_message', None)
@@ -646,16 +643,12 @@ def render_dem25_tab():
     if st.session_state.get('lat_wgs84') and st.session_state.get('lon_wgs84'):
         folium.Marker([st.session_state.lat_wgs84, st.session_state.lon_wgs84], popup="Punto de Interés (Pestaña 1)", icon=folium.Icon(color="red", icon="info-sign")).add_to(map_select)
 
-    if 'precalculated_acc' in st.session_state and st.session_state.precalculated_acc is not None:
-            # Definimos los límites del DEM para la capa de imagen
+    if 'acc_binary_precalc' in st.session_state and st.session_state.acc_binary_precalc is not None:
             dem_bounds = st.session_state.cuenca_results['dem_bounds']
             bounds = [[dem_bounds.bottom, dem_bounds.left], [dem_bounds.top, dem_bounds.right]]
     
-            # Creamos un colormap de blanco y negro
             blanco_negro_cmap = colors.ListedColormap(['black', 'white'])
     
-            # Superponemos la imagen binaria directamente desde el array de numpy
-            # La opción 'pixelated=True' evita la interpolación y suavizado
             umbral_acumulacion = 1000 # Necesitas definir el umbral aquí para el nombre de la capa
             folium.raster_layers.ImageOverlay(
                 name=f"Referencia de Cauces (umbral > {umbral_acumulacion} celdas)",
