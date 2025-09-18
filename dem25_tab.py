@@ -51,9 +51,6 @@ CELL_AREA_M2 = 625 # Área de una celda de 25x25m
 CELL_AREA_KM2 = CELL_AREA_M2 / 1_000_000 # 0.000625 km²
 
 
-# dem25_tab.py
-
-# ... (imports y constantes sin cambios) ...
 
 # ==============================================================================
 # SECCIÓN 3: LÓGICA DE ANÁLISIS HIDROLÓGICO (MODIFICADA)
@@ -136,7 +133,7 @@ def delinear_cuenca_desde_punto(_dem_bytes, outlet_coords_wgs84, umbral_rio_expo
         if dem_path_for_pysheds and os.path.exists(dem_path_for_pysheds):
             os.remove(dem_path_for_pysheds)
 
-@st.cache_data(show_spinner="Paso 2: Calculando morfometría y generando gráficos...")
+@st.cache_data(show_spinner="Paso 2: Calculando morfometría...")
 def calcular_morfometria_cuenca(_pysheds_data, umbral_rio_export):
     results = {"success": False, "message": ""}
     dem_path_for_pysheds = None # Para asegurar la limpieza
@@ -241,31 +238,8 @@ def calcular_morfometria_cuenca(_pysheds_data, umbral_rio_export):
         elev_normalizada = (elev_sorted - elev_sorted.min()) / (elev_sorted.max() - elev_sorted.min())
         integral_hipsometrica = abs(np.trapz(area_normalizada, x=elev_normalizada))
 
-        # --- INICIO: GENERACIÓN DE GRÁFICOS (SOLO LOS REQUERIDOS) ---
-        plots = {}
-        
-        # GRÁFICO 4: PERFIL LONGITUDINAL DEL LFP
-        fig4, ax = plt.subplots(figsize=(12, 6))
-        ax.plot(np.array(profile_distances) / 1000, profile_elevations, color='darkblue')
-        ax.fill_between(np.array(profile_distances) / 1000, profile_elevations, alpha=0.2, color='lightblue')
-        ax.set_title('Perfil Longitudinal del LFP'); ax.set_xlabel('Distancia (km)'); ax.set_ylabel('Elevación (m)'); ax.grid(True)
-        plots['grafico_4_perfil_lfp'] = fig_to_base64(fig4)
-
-        # GRÁFICOS 5 y 6: HISTOGRAMA Y CURVA HIPSOMÉTRICA
-        fig56, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
-        ax1.hist(elevaciones_cuenca, bins=50, color='skyblue', edgecolor='black')
-        ax1.set_title('Distribución de Elevaciones'); ax1.set_xlabel('Elevación (m)'); ax1.set_ylabel('Frecuencia')
-        
-        ax2.plot(area_normalizada, elev_sorted, color='red', linewidth=2, label='Curva Hipsométrica')
-        ax2.fill_between(area_normalizada, elev_sorted, elev_sorted.min(), color='red', alpha=0.2)
-        ax2.plot([0, 1], [elev_sorted.max(), elev_sorted.min()], color='gray', linestyle='--', linewidth=2, label='Referencia lineal (HI=0.5)')
-        ax2.text(0.05, 0.1, f'Integral Hipsométrica: {integral_hipsometrica:.3f}', transform=ax2.transAxes, fontsize=12, bbox=dict(facecolor='white', alpha=0.8))
-        ax2.set_title('Curva Hipsométrica'); ax2.set_xlabel('Fracción de área (a/A)'); ax2.set_ylabel('Elevación (m)'); ax2.legend(); ax2.set_xlim(0, 1)
-        plots['grafico_5_6_histo_hipso'] = fig_to_base64(fig56)
-        # --- FIN: GENERACIÓN DE GRÁFICOS ---
-
         results.update({
-            "success": True, "message": "Morfometría calculada y gráficos generados con éxito.",
+            "success": True, "message": "Morfometría calculada con éxito.",
             "morphometry_data": {
                 "lfp_profile_data": {"distancia_m": profile_distances, "elevacion_m": profile_elevations},
                 "lfp_metrics": {"cota_ini_m": cota_ini, "cota_fin_m": cota_fin, "longitud_m": longitud_total_m, "pendiente_media": pendiente_media, "tc_h": tc_h, "tc_min": tc_h * 60},
@@ -276,8 +250,7 @@ def calcular_morfometria_cuenca(_pysheds_data, umbral_rio_export):
             "downloads": {
                 "lfp": gpd.GeoDataFrame({'id': [1], 'geometry': [LineString(lfp_coords)]}, crs=dem_crs).to_json(),
                 "rios_strahler": gdf_streams_full.to_json()
-            },
-            "plots": plots # Los gráficos ahora se devuelven aquí
+            }
         })
         return results
     except Exception as e:
@@ -288,16 +261,15 @@ def calcular_morfometria_cuenca(_pysheds_data, umbral_rio_export):
             os.remove(dem_path_for_pysheds)
             
             
-@st.cache_data(show_spinner="Paso 3: Generando gráficos y análisis finales...")
-def generar_graficos_y_analisis(_pysheds_data, _morphometry_data, umbral_rio_export):
+@st.cache_data(show_spinner="Paso 3: Generando gráficos...")
+def generar_graficos_y_analisis(_pysheds_data, _morphometry_data):
     results = {"success": False, "message": ""}
     dem_path_for_pysheds = None # Para asegurar la limpieza
     try:
-        # Recuperar datos esenciales
+        # Recuperar datos esenciales para reconstruir Grid
         dem_bytes = _pysheds_data["dem_bytes"]
-        x_snap, y_snap = _pysheds_data["x_snap"], _pysheds_data["y_snap"] # Necesario para catchment
+        x_snap, y_snap = _pysheds_data["x_snap"], _pysheds_data["y_snap"]
         out_transform = _pysheds_data["out_transform"]
-        dem_crs = _pysheds_data["dem_crs"]
         no_data_value = _pysheds_data["no_data_value"]
 
         # Reconstruir el Grid de PySheds a partir del DEM original
@@ -306,93 +278,23 @@ def generar_graficos_y_analisis(_pysheds_data, _morphometry_data, umbral_rio_exp
             dem_path_for_pysheds = tmp_dem_pysheds.name
 
         grid = Grid.from_raster(dem_path_for_pysheds, nodata=no_data_value)
-        dem = grid.read_raster(dem_path_for_pysheds, nodata=no_data_value) # Obtener el objeto Raster del DEM
-
-        # Volver a ejecutar los pasos de preprocesamiento para obtener objetos Raster válidos
+        dem = grid.read_raster(tmp_dem_pysheds.name, nodata=no_data_value) # Usar tmp_dem_pysheds.name
+        
+        # Re-ejecutar preprocesamiento para obtener conditioned_dem y catch (necesario para histograma)
         pit_filled_dem = grid.fill_pits(dem)
         flooded_dem = grid.fill_depressions(pit_filled_dem)
         conditioned_dem = grid.resolve_flats(flooded_dem)
-        flowdir = grid.flowdir(conditioned_dem)
-        acc = grid.accumulation(flowdir)
-        catch = grid.catchment(x=x_snap, y=y_snap, fdir=flowdir, xytype="coordinate") # Re-delinear la cuenca
+        flowdir = grid.flowdir(conditioned_dem) # Necesario para catch
+        acc = grid.accumulation(flowdir) # Necesario para catch
+        catch = grid.catchment(x=x_snap, y=y_snap, fdir=flowdir, xytype="coordinate")
 
+        # Recuperar datos para gráficos
         lfp_profile_data = _morphometry_data["lfp_profile_data"]
         hypsometric_data = _morphometry_data["hypsometric_data"]
-        lfp_coords = _morphometry_data["lfp_coords"]
-        gdf_streams_full = _morphometry_data["gdf_streams_full"]
-        upa_pyflwdir_array = _morphometry_data["upa_pyflwdir_array"] # UPA de pyflwdir (array NumPy)
-
+        
         plots = {}
         
-        # GRÁFICO 1: MOSAICO DE CARACTERÍSTICAS
-        plot_extent = grid.extent
-        fig1, axes = plt.subplots(2, 2, figsize=(12, 10))
-        
-        # Extensión de la Cuenca
-        axes[0, 0].imshow(catch.view(), extent=plot_extent, cmap='Reds_r')
-        axes[0, 0].set_title("Extensión de la Cuenca")
-        num_celdas_cuenca = np.sum(catch.view())
-        area_pixel_m2 = abs(grid.affine.a * grid.affine.e)
-        area_cuenca_km2 = (num_celdas_cuenca * area_pixel_m2) / 1_000_000
-        area_texto = f'{area_cuenca_km2:.1f} km²'
-        centro_x = (plot_extent[0] + plot_extent[1]) / 2
-        centro_y = (plot_extent[2] + plot_extent[3]) / 2
-        axes[0, 0].text(centro_x, centro_y, area_texto, ha='center', va='center', color='white', fontsize=12, fontweight='bold')
-        
-        # Elevación
-        im_dem = axes[0, 1].imshow(conditioned_dem.view(), extent=plot_extent, cmap='terrain')
-        axes[0, 1].set_title("Elevación")
-        fig1.colorbar(im_dem, ax=axes[0, 1], label='Elevación (m)', shrink=0.7)
-        
-        # Dirección de Flujo
-        im_fdir = axes[1, 0].imshow(flowdir.view(), extent=plot_extent, cmap='twilight')
-        axes[1, 0].set_title("Dirección de Flujo")
-        
-        # Acumulación de Flujo
-        im_acc = axes[1, 1].imshow(acc.view(), extent=plot_extent, cmap='cubehelix', norm=colors.LogNorm(vmin=1, vmax=acc.view().max()))
-        axes[1, 1].set_title("Acumulación de Flujo")
-        fig1.colorbar(im_acc, ax=axes[1, 1], label='Nº celdas', shrink=0.7)
-        
-        for ax in axes.flat: ax.tick_params(axis='both', labelsize=6)
-        plt.suptitle("Características de la Cuenca Delineada", fontsize=16)
-        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-        plots['grafico_1_mosaico'] = fig_to_base64(fig1)
-
-        # GRÁFICO 3/7 UNIFICADO: LFP y Red Fluvial de Strahler
-        # Recortar la red fluvial a la cuenca delineada
-        shapes_cuenca_clip = features.shapes(catch.view().astype(np.uint8), mask=catch.view(), transform=out_transform)
-        cuenca_geom_clip = [Polygon(s['coordinates'][0]) for s, v in shapes_cuenca_clip if v == 1][0]
-        gdf_cuenca_clip = gpd.GeoDataFrame(geometry=[cuenca_geom_clip], crs=dem_crs)
-        gdf_streams_recortado = gpd.clip(gdf_streams_full, gdf_cuenca_clip)
-        
-        dem_cuenca_recortada = conditioned_dem.view()
-        dem_cuenca_recortada = np.where(catch.view(), dem_cuenca_recortada, np.nan) # Enmascarar fuera de la cuenca
-        
-        fig37, axes = plt.subplots(1, 2, figsize=(18, 9))
-        ax1 = axes[0]
-        im1 = ax1.imshow(dem_cuenca_recortada, extent=plot_extent, cmap='terrain', zorder=1)
-        fig37.colorbar(im1, ax=ax1, label='Elevación (m)', shrink=0.6)
-        x_coords, y_coords = zip(*lfp_coords)
-        ax1.plot(x_coords, y_coords, color='red', linewidth=2, label='Longest Flow Path', zorder=2)
-        ax1.set_title('Camino de Flujo Más Largo (LFP)'); ax1.legend(); ax1.grid(True, linestyle='--', alpha=0.6)
-        ax2 = axes[1]
-        ax2.imshow(dem_cuenca_recortada, extent=plot_extent, cmap='Greys_r', alpha=0.8, zorder=1)
-        gdf_streams_recortado_clean = gdf_streams_recortado[gdf_streams_recortado.geom_type.isin(["LineString", "MultiLineString"])]
-        if not gdf_streams_recortado_clean.empty:
-            gdf_streams_recortado_clean['strord'] = pd.to_numeric(gdf_streams_recortado_clean['strord'], errors='coerce')
-            gdf_streams_recortado_clean = gdf_streams_recortado_clean.dropna(subset=['strord'])
-            if not gdf_streams_recortado_clean.empty:
-                gdf_streams_recortado_clean.plot(ax=ax2, column='strord', cmap='Blues', zorder=2, legend=True, categorical=True, legend_kwds={'title': "Orden de Strahler", 'loc': 'upper right'})
-            else:
-                ax2.text(0.5, 0.5, 'No se encontraron ríos\ncon el umbral actual', horizontalalignment='center', verticalalignment='center', transform=ax2.transAxes, bbox=dict(facecolor='white', alpha=0.8))
-        else:
-            ax2.text(0.5, 0.5, 'No se encontraron ríos\ncon el umbral actual', horizontalalignment='center', verticalalignment='center', transform=ax2.transAxes, bbox=dict(facecolor='white', alpha=0.8))
-        ax2.set_title('Red Fluvial por Orden de Strahler')
-        plt.suptitle("Análisis Morfométrico de la Cuenca", fontsize=16)
-        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-        plots['grafico_3_7_lfp_strahler'] = fig_to_base64(fig37)
-
-        # GRÁFICO 4: PERFIL LONGITUDINAL Y MÉTRICAS LFP
+        # GRÁFICO 4: PERFIL LONGITUDINAL DEL LFP
         fig4, ax = plt.subplots(figsize=(12, 6))
         ax.plot(np.array(lfp_profile_data["distancia_m"]) / 1000, lfp_profile_data["elevacion_m"], color='darkblue')
         ax.fill_between(np.array(lfp_profile_data["distancia_m"]) / 1000, lfp_profile_data["elevacion_m"], alpha=0.2, color='lightblue')
@@ -400,7 +302,7 @@ def generar_graficos_y_analisis(_pysheds_data, _morphometry_data, umbral_rio_exp
         plots['grafico_4_perfil_lfp'] = fig_to_base64(fig4)
 
         # GRÁFICOS 5 y 6: HISTOGRAMA Y CURVA HIPSOMÉTRICA
-        elevaciones_cuenca = conditioned_dem.view()[catch.view()]
+        elevaciones_cuenca = conditioned_dem.view()[catch.view()] # Necesario para el histograma
         fig56, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
         ax1.hist(elevaciones_cuenca, bins=50, color='skyblue', edgecolor='black')
         ax1.set_title('Distribución de Elevaciones'); ax1.set_xlabel('Elevación (m)'); ax1.set_ylabel('Frecuencia')
@@ -408,58 +310,21 @@ def generar_graficos_y_analisis(_pysheds_data, _morphometry_data, umbral_rio_exp
         area_normalizada = hypsometric_data["area_normalizada"]
         elev_sorted = hypsometric_data["elevacion"]
         integral_hipsometrica = hypsometric_data["integral_hipsometrica"]
-        elev_min, elev_max = np.min(elev_sorted), np.max(elev_sorted)
-
+        
         ax2.plot(area_normalizada, elev_sorted, color='red', linewidth=2, label='Curva Hipsométrica')
-        ax2.fill_between(area_normalizada, elev_sorted, elev_min, color='red', alpha=0.2)
-        ax2.plot([0, 1], [elev_max, elev_min], color='gray', linestyle='--', linewidth=2, label='Referencia lineal (HI=0.5)')
+        ax2.fill_between(area_normalizada, elev_sorted, elev_sorted.min(), color='red', alpha=0.2)
+        ax2.plot([0, 1], [elev_sorted.max(), elev_sorted.min()], color='gray', linestyle='--', linewidth=2, label='Referencia lineal (HI=0.5)')
         ax2.text(0.05, 0.1, f'Integral Hipsométrica: {integral_hipsometrica:.3f}', transform=ax2.transAxes, fontsize=12, bbox=dict(facecolor='white', alpha=0.8))
         ax2.set_title('Curva Hipsométrica'); ax2.set_xlabel('Fracción de área (a/A)'); ax2.set_ylabel('Elevación (m)'); ax2.legend(); ax2.set_xlim(0, 1)
         plots['grafico_5_6_histo_hipso'] = fig_to_base64(fig56)
 
-        # GRÁFICO 11: HAND Y LLANURAS DE INUNDACIÓN
-        flw_recortado = pyflwdir.from_dem(data=conditioned_dem.view(), nodata=no_data_value, transform=out_transform, latlon=False)
-        # Reconstruir el objeto UPA de pyflwdir a partir del array NumPy guardado
-        upa_pyflwdir_obj = pyflwdir.Raster(upa_pyflwdir_array, flw_recortado.affine, flw_recortado.crs, flw_recortado.nodata)
-        upa_km2 = upa_pyflwdir_obj.to_crs(unit='km2')
-        
-        upa_min_threshold = 1.0 # Umbral para drenajes en km2
-        hand = flw_recortado.hand(drain=upa_km2.view() > upa_min_threshold, elevtn=conditioned_dem.view())
-        floodplains = flw_recortado.floodplains(elevtn=conditioned_dem.view(), uparea=upa_km2.view(), upa_min=upa_min_threshold)
-        
-        dem_background = np.where(catch.view(), conditioned_dem.view(), np.nan)
-        hand_masked = np.where(catch.view() & (hand > 0), hand, np.nan)
-        floodplains_masked = np.where(catch.view() & (floodplains > 0), 1.0, np.nan)
-        
-        fig11, axes = plt.subplots(1, 2, figsize=(18, 9))
-        ax1, ax2 = axes[0], axes[1]
-        xmin, xmax, ymin, ymax = plot_extent
-        
-        ax1.imshow(dem_background, extent=plot_extent, cmap='Greys_r', zorder=1)
-        vmax_hand = np.nanpercentile(hand_masked, 98) if not np.all(np.isnan(hand_masked)) else 1
-        im_hand = ax1.imshow(hand_masked, extent=plot_extent, cmap='gist_earth_r', alpha=0.7, zorder=2, vmin=0, vmax=vmax_hand)
-        fig11.colorbar(im_hand, ax=ax1, label='Altura sobre drenaje (m)', shrink=0.6)
-        ax1.set_title(f'Altura Sobre Drenaje (HAND)\n(upa_min > {upa_min_threshold:.1f} km²)')
-        ax1.set_xlabel('Coordenada X (UTM)'); ax1.set_ylabel('Coordenada Y (UTM)'); ax1.grid(True, linestyle='--', alpha=0.6)
-        ax1.set_xlim(xmin, xmax); ax1.set_ylim(ymin, ymax)
-        
-        ax2.imshow(dem_background, extent=plot_extent, cmap='Greys', zorder=1)
-        ax2.imshow(floodplains_masked, extent=plot_extent, cmap='Blues', alpha=0.7, zorder=2, vmin=0, vmax=1)
-        ax2.set_title(f'Llanuras de Inundación\n(upa_min > {upa_min_threshold:.1f} km²)')
-        ax2.set_xlabel('Coordenada X (UTM)'); ax2.set_ylabel(''); ax2.grid(True, linestyle='--', alpha=0.6)
-        ax2.set_xlim(xmin, xmax); ax2.set_ylim(ymin, ymax)
-        
-        fig11.suptitle("Índices de Elevación (HAND y Llanuras de Inundación)", fontsize=16)
-        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-        plots['grafico_11_llanuras'] = fig_to_base64(fig11)
-
         results.update({
             "success": True, "message": "Gráficos generados con éxito.",
-            "visualization_data": {"plots": plots}
+            "plots": plots
         })
         return results
     except Exception as e:
-        results['message'] = f"Error en gráficos: {e}\n{traceback.format_exc()}"
+        results['message'] = f"Error en generación de gráficos: {e}\n{traceback.format_exc()}"
         return results
     finally:
         if dem_path_for_pysheds and os.path.exists(dem_path_for_pysheds):
@@ -788,6 +653,8 @@ def render_dem25_tab():
 
 
 
+    # ... (código anterior de render_dem25_tab hasta aquí, incluyendo el map_output_select) ...
+
     if map_output_select.get("last_clicked"):
         if st.session_state.get('outlet_coords') != map_output_select["last_clicked"]:
             st.session_state.outlet_coords = map_output_select["last_clicked"]
@@ -796,7 +663,7 @@ def render_dem25_tab():
             st.session_state.pop('delineated_downloads', None)
             st.session_state.pop('morphometry_data', None)
             st.session_state.pop('downloads', None) # Limpiar descargas anteriores
-            st.session_state.pop('plots', None) # Limpiar plots anteriores
+            st.session_state.pop('generated_plots', None) # Limpiar plots generados por el Paso 3
             st.rerun()
 
     # --- SECCIÓN DE CÁLCULO Y VISUALIZACIÓN (MODIFICADA) ---
@@ -808,7 +675,7 @@ def render_dem25_tab():
     area_seleccionada_km2 = umbral_celdas * CELL_AREA_KM2
     st.info(f"**Valor seleccionado:** {umbral_celdas} celdas  ➡️  **Área de drenaje mínima:** {area_seleccionada_km2:.4f} km²")
 
-    b_col1, b_col2 = st.columns(2) # Solo dos columnas para dos botones
+    b_col1, b_col2, b_col3 = st.columns(3) # Ahora 3 botones de nuevo
     
     # Botón 1: Delinear Cuenca
     with b_col1:
@@ -822,19 +689,19 @@ def render_dem25_tab():
             if results['success']:
                 st.session_state.pysheds_data = results['pysheds_data']
                 st.session_state.delineated_downloads = results['downloads']
-                # Limpiar resultados del Paso 2 si el Paso 1 se recalcula
+                # Limpiar resultados de pasos 2 y 3 si el Paso 1 se recalcula
                 st.session_state.pop('morphometry_data', None)
                 st.session_state.pop('downloads', None)
-                st.session_state.pop('plots', None)
+                st.session_state.pop('generated_plots', None)
                 st.success(results['message'])
                 st.rerun()
             else:
                 st.error(f"Falló el Paso 1: {results['message']}")
     
-    # Botón 2: Analizar Morfometría y Generar Gráficos
+    # Botón 2: Analizar Morfometría
     with b_col2:
-        if st.button("2. Analizar Morfometría y Generar Gráficos", use_container_width=True, disabled=not st.session_state.get('pysheds_data')):
-            with st.spinner("Calculando morfometría y generando gráficos..."):
+        if st.button("2. Analizar Morfometría", use_container_width=True, disabled=not st.session_state.get('pysheds_data')):
+            with st.spinner("Calculando morfometría..."):
                 results = calcular_morfometria_cuenca(
                     st.session_state.pysheds_data,
                     umbral_celdas
@@ -842,11 +709,28 @@ def render_dem25_tab():
             if results['success']:
                 st.session_state.morphometry_data = results['morphometry_data']
                 st.session_state.downloads = results['downloads'] # Guardar descargas aquí
-                st.session_state.plots = results['plots'] # Guardar plots aquí
+                # Limpiar plots generados por el Paso 3 si el Paso 2 se recalcula
+                st.session_state.pop('generated_plots', None)
                 st.success(results['message'])
                 st.rerun()
             else:
                 st.error(f"Falló el Paso 2: {results['message']}")
+
+    # Botón 3: Generar Gráficos
+    with b_col3:
+        if st.button("3. Generar Gráficos", use_container_width=True, disabled=not st.session_state.get('morphometry_data')):
+            with st.spinner("Generando gráficos..."):
+                results = generar_graficos_y_analisis(
+                    st.session_state.pysheds_data,
+                    st.session_state.morphometry_data
+                )
+            if results['success']:
+                st.session_state.generated_plots = results['plots'] # Guardar plots aquí
+                st.success(results['message'])
+                st.rerun()
+            else:
+                st.error(f"Falló el Paso 3: {results['message']}")
+
 
     # --- Lógica para mostrar los resultados por pasos ---
     if st.session_state.get('pysheds_data'):
@@ -883,9 +767,9 @@ def render_dem25_tab():
             st.warning(f"Error al mostrar resultados del Paso 1: {e}")
             st.code(traceback.format_exc())
 
-        # --- Resultados del Paso 2: Morfometría y Gráficos ---
+        # --- Resultados del Paso 2: Morfometría ---
         if st.session_state.get('morphometry_data'):
-            st.subheader("Resultados del Paso 2: Morfometría y Gráficos")
+            st.subheader("Resultados del Paso 2: Morfometría")
             
             # 1. Longitud de LFP y Pendiente Media y T. Concentración
             if "lfp_metrics" in st.session_state.morphometry_data:
@@ -917,19 +801,25 @@ def render_dem25_tab():
                     zip_rios_strahler = export_gdf_to_zip(gdf_rios_strahler_download, "rios_strahler")
                     st.download_button("📥 Descargar Ríos Strahler (.zip)", zip_rios_strahler, "rios_strahler.zip", "application/zip", use_container_width=True)
 
+        # --- Resultados del Paso 3: Gráficos ---
+        if st.session_state.get('generated_plots'):
+            st.subheader("Resultados del Paso 3: Gráficos")
+            
+            plots = st.session_state.generated_plots
+
             # Gráfico del perfil longitudinal del LFP + tabla
-            if st.session_state.get('plots') and st.session_state.plots.get('grafico_4_perfil_lfp'):
+            if plots.get('grafico_4_perfil_lfp'):
                 st.markdown("#### Perfil Longitudinal del LFP")
-                st.image(io.BytesIO(base64.b64decode(st.session_state.plots['grafico_4_perfil_lfp'])), caption="Perfil Longitudinal del LFP", use_container_width=True)
+                st.image(io.BytesIO(base64.b64decode(plots['grafico_4_perfil_lfp'])), caption="Perfil Longitudinal del LFP", use_container_width=True)
                 
                 if st.session_state.morphometry_data.get("lfp_profile_data"):
                     df_lfp_profile = pd.DataFrame(st.session_state.morphometry_data["lfp_profile_data"])
                     st.dataframe(df_lfp_profile, use_container_width=True)
             
             # Gráficos de curva hipsométrica + tabla
-            if st.session_state.get('plots') and st.session_state.plots.get('grafico_5_6_histo_hipso'):
+            if plots.get('grafico_5_6_histo_hipso'):
                 st.markdown("#### Histograma de Elevaciones y Curva Hipsométrica")
-                st.image(io.BytesIO(base64.b64decode(st.session_state.plots['grafico_5_6_histo_hipso'])), caption="Histograma de Elevaciones y Curva Hipsométrica", use_container_width=True)
+                st.image(io.BytesIO(base64.b64decode(plots['grafico_5_6_histo_hipso'])), caption="Histograma de Elevaciones y Curva Hipsométrica", use_container_width=True)
                 
                 if st.session_state.morphometry_data.get("hypsometric_data"):
                     df_hypsometric = pd.DataFrame(st.session_state.morphometry_data["hypsometric_data"])
