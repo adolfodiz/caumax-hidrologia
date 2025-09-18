@@ -655,6 +655,9 @@ def render_dem25_tab():
     map_output_select = st_folium(map_select, key="map_select", use_container_width=True, height=800, returned_objects=['last_clicked'])
 
 
+
+    # ... (código anterior de render_dem25_tab hasta aquí, incluyendo el map_output_select) ...
+
     if map_output_select.get("last_clicked"):
         if st.session_state.get('outlet_coords') != map_output_select["last_clicked"]:
             st.session_state.outlet_coords = map_output_select["last_clicked"]
