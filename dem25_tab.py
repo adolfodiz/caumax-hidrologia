@@ -826,6 +826,7 @@ def render_dem25_tab():
             else:
                 st.error(f"Falló el Paso 3: {results['message']}")
 
+
     # --- Lógica para mostrar los resultados por pasos ---
     if st.session_state.get('pysheds_data'):
         st.divider()
@@ -860,74 +861,127 @@ def render_dem25_tab():
         # --- Resultados del Paso 2: Morfometría ---
         if st.session_state.get('morphometry_data'):
             st.subheader("Resultados del Paso 2: Morfometría")
-            try:
-                gdf_cuenca = gpd.read_file(st.session_state.delineated_downloads["cuenca"])
-                gdf_lfp = gpd.read_file(st.session_state.morphometry_downloads["lfp"])
-                gdf_rios_strahler = gpd.read_file(st.session_state.morphometry_downloads["rios_strahler"])
+            
+            # 1. Longitud de LFP y Pendiente Media y T. Concentración
+            if "lfp_metrics" in st.session_state.morphometry_data:
+                st.markdown("#### Métricas del Camino de Flujo Principal (LFP)")
+                metrics = st.session_state.morphometry_data["lfp_metrics"]
                 
-                # Recortar los ríos a la cuenca delineada para visualización
-                gdf_rios_recortado = gpd.clip(gdf_rios_strahler, gdf_cuenca)
-                
-                res2_col1, res2_col2 = st.columns([2,1])
-                with res2_col1:
-                    m_results_2 = folium.Map(tiles="CartoDB positron")
-                    folium.GeoJson(gdf_cuenca.to_crs("EPSG:4326"), name="Cuenca", style_function=lambda x: {'color': '#FF0000', 'weight': 1, 'fillOpacity': 0.1}).add_to(m_results_2)
-                    folium.GeoJson(gdf_lfp.to_crs("EPSG:4326"), name="LFP", style_function=lambda x: {'color': '#FFFF00', 'weight': 4}).add_to(m_results_2)
-                    
-                    if not gdf_rios_recortado.empty and 'strord' in gdf_rios_recortado.columns:
-                        import branca.colormap as cm
-                        min_order, max_order = gdf_rios_recortado['strord'].min(), gdf_rios_recortado['strord'].max()
-                        colormap = cm.LinearColormap(colors=['lightblue', 'blue', 'darkblue'], vmin=min_order, vmax=max_order)
-                        folium.GeoJson(gdf_rios_recortado.to_crs("EPSG:4326"), name="Red Fluvial (Strahler)", style_function=lambda f: {'color': colormap(f['properties']['strord']), 'weight': f['properties']['strord'] / 2 + 1, 'opacity': 0.8}, tooltip=lambda f: f"Orden: {f['properties']['strord']}").add_to(m_results_2)
-                        m_results_2.add_child(colormap)
-                    
-                    m_results_2.fit_bounds(gdf_cuenca.to_crs("EPSG:4326").total_bounds[[1, 0, 3, 2]].tolist()); folium.LayerControl().add_to(m_results_2)
-                    st_folium(m_results_2, key="results_map_2", use_container_width=True, height=400)
-                with res2_col2:
-                    st.markdown("**Métricas del LFP**")
-                    metrics = st.session_state.morphometry_data["lfp_metrics"]
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Cota Inicio (Salida)", f"{metrics.get('cota_ini_m', 0):.2f} m")
+                    st.metric("Cota Fin (Divisoria)", f"{metrics.get('cota_fin_m', 0):.2f} m")
+                with col2:
                     st.metric("Longitud LFP", f"{metrics.get('longitud_m', 0):.2f} m")
                     st.metric("Pendiente Media", f"{metrics.get('pendiente_media', 0):.4f} m/m")
-                    st.metric("T. Concentración", f"{metrics.get('tc_h', 0):.3f} h")
-                    st.download_button("📥 Descargar LFP (.zip)", export_gdf_to_zip(gdf_lfp, "lfp"), "lfp.zip", "application/zip", use_container_width=True)
-                    st.download_button("📥 Descargar Red Fluvial (.zip)", export_gdf_to_zip(gdf_rios_strahler, "rios_strahler"), "rios_strahler.zip", "application/zip", use_container_width=True)
-            except Exception as e:
-                st.warning(f"Error al mostrar resultados del Paso 2: {e}")
-                st.code(traceback.format_exc())
+                with col3:
+                    st.metric("Tiempo Concentración", f"{metrics.get('tc_h', 0):.3f} h")
+                    st.caption(f"Equivalente a {metrics.get('tc_min', 0):.2f} minutos")
+            
+            # 2. Gráfico del perfil longitudinal del LFP y tabla de LFP con elevación y descarga
+            if st.session_state.get('visualization_data') and st.session_state.visualization_data.get('plots', {}).get('grafico_4_perfil_lfp'):
+                st.markdown("#### Perfil Longitudinal del LFP")
+                st.image(io.BytesIO(base64.b64decode(st.session_state.visualization_data['plots']['grafico_4_perfil_lfp'])), caption="Perfil Longitudinal del LFP", use_container_width=True)
+                
+                if st.session_state.morphometry_data.get("lfp_profile_data"):
+                    df_lfp_profile = pd.DataFrame(st.session_state.morphometry_data["lfp_profile_data"])
+                    st.dataframe(df_lfp_profile, use_container_width=True)
+                    csv_lfp_profile = df_lfp_profile.to_csv(index=False, sep=';').encode('utf-8')
+                    st.download_button("📥 Descargar Perfil LFP (.csv)", csv_lfp_profile, "perfil_lfp.csv", "text/csv", use_container_width=True)
+            
+            # 3. Gráficos de curva hipsométrica (área normalizada, elevación, integral hipsométrica)
+            if st.session_state.get('visualization_data') and st.session_state.visualization_data.get('plots', {}).get('grafico_5_6_histo_hipso'):
+                st.markdown("#### Histograma de Elevaciones y Curva Hipsométrica")
+                st.image(io.BytesIO(base64.b64decode(st.session_state.visualization_data['plots']['grafico_5_6_histo_hipso'])), caption="Histograma de Elevaciones y Curva Hipsométrica", use_container_width=True)
+                
+                if st.session_state.morphometry_data.get("hypsometric_data"):
+                    df_hypsometric = pd.DataFrame(st.session_state.morphometry_data["hypsometric_data"])
+                    st.dataframe(df_hypsometric, use_container_width=True)
+                    csv_hypsometric = df_hypsometric.to_csv(index=False, sep=';').encode('utf-8')
+                    st.download_button("📥 Descargar Curva Hipsométrica (.csv)", csv_hypsometric, "curva_hipsometrica.csv", "text/csv", use_container_width=True)
+            
+            # 4. Descarga rios_strahler zip
+            if st.session_state.get('morphometry_downloads') and st.session_state.morphometry_downloads.get("rios_strahler"):
+                st.markdown("#### Descarga de Red Fluvial por Orden de Strahler")
+                gdf_rios_strahler_download = gpd.read_file(st.session_state.morphometry_downloads["rios_strahler"])
+                zip_rios_strahler = export_gdf_to_zip(gdf_rios_strahler_download, "rios_strahler")
+                st.download_button("📥 Descargar Ríos Strahler (.zip)", zip_rios_strahler, "rios_strahler.zip", "application/zip", use_container_width=True)
 
-        # --- Resultados del Paso 3: Gráficos de Análisis ---
-        if st.session_state.get('visualization_data'):
-            st.subheader("Resultados del Paso 3: Gráficos de Análisis")
+            # 5. Mapa Folium con las capas
+            st.markdown("#### Visor de Resultados GIS")
+            st.info("Este mapa muestra la cuenca delineada, el LFP, la red fluvial por orden de Strahler y el punto de desagüe. Las capas están disponibles para descarga en formato Shapefile.")
             try:
-                plots = st.session_state.visualization_data["plots"]
-                plot_titles = {
+                gdf_cuenca_map = gpd.read_file(st.session_state.delineated_downloads["cuenca"])
+                gdf_lfp_map = gpd.read_file(st.session_state.morphometry_downloads["lfp"])
+                gdf_punto_map = gpd.read_file(st.session_state.delineated_downloads["punto_salida"])
+                
+                gdf_cuenca_wgs84 = gdf_cuenca_map.to_crs("EPSG:4326")
+                gdf_lfp_wgs84 = gdf_lfp_map.to_crs("EPSG:4326")
+                gdf_punto_wgs84 = gdf_punto_map.to_crs("EPSG:4326")
+
+                m_results_2 = folium.Map(tiles="CartoDB positron")
+                folium.TileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', attr='Esri', name='Imágenes Satélite').add_to(m_results_2)
+
+                folium.GeoJson(gdf_cuenca_wgs84, name="Cuenca Delineada", style_function=lambda x: {'color': '#FF0000', 'weight': 2.5, 'fillColor': '#FF0000', 'fillOpacity': 0.2}).add_to(m_results_2)
+                folium.GeoJson(gdf_lfp_wgs84, name="Longest Flow Path (LFP)", style_function=lambda x: {'color': '#FFFF00', 'weight': 4, 'opacity': 0.9}).add_to(m_results_2)
+                
+                if st.session_state.morphometry_downloads.get("rios_strahler"):
+                    gdf_rios_strahler_map = gpd.read_file(st.session_state.morphometry_downloads["rios_strahler"]).to_crs("EPSG:4326")
+                    
+                    # Robustecer la lógica para la capa de ríos Strahler
+                    if not gdf_rios_strahler_map.empty and 'strord' in gdf_rios_strahler_map.columns:
+                        # Asegurarse de que 'strord' sea numérico y manejar NaNs
+                        gdf_rios_strahler_map['strord'] = pd.to_numeric(gdf_rios_strahler_map['strord'], errors='coerce')
+                        gdf_rios_strahler_map_clean = gdf_rios_strahler_map.dropna(subset=['strord'])
+
+                        if not gdf_rios_strahler_map_clean.empty:
+                            min_order, max_order = gdf_rios_strahler_map_clean['strord'].min(), gdf_rios_strahler_map_clean['strord'].max()
+                            colormap = cm.LinearColormap(colors=['lightblue', 'blue', 'darkblue'], vmin=min_order, vmax=max_order)
+                            
+                            folium.GeoJson(
+                                gdf_rios_strahler_map_clean,
+                                name="Red Fluvial (Strahler)",
+                                style_function=lambda feature: {
+                                    'color': colormap(feature['properties']['strord']),
+                                    'weight': feature['properties']['strord'] / 2 + 1,
+                                    'opacity': 0.8,
+                                },
+                                tooltip=lambda feature: f"Orden: {feature['properties']['strord']}"
+                            ).add_to(m_results_2)
+                            m_results_2.add_child(colormap)
+                        else:
+                            st.warning("No se encontraron ríos válidos para mostrar en el mapa con el umbral actual.")
+                    else:
+                        st.warning("No hay datos de ríos Strahler o la columna 'strord' no es válida para mostrar en el mapa.")
+
+                lat, lon = gdf_punto_wgs84.geometry.iloc[0].y, gdf_punto_wgs84.geometry.iloc[0].x
+                folium.Marker([lat, lon], popup="Punto de Desagüe", icon=folium.Icon(color='green', icon='tint', prefix='fa')).add_to(m_results_2)
+
+                m_results_2.fit_bounds(gdf_cuenca_wgs84.total_bounds[[1, 0, 3, 2]].tolist())
+                folium.LayerControl().add_to(m_results_2)
+                st_folium(m_results_2, key="results_map_2", use_container_width=True, height=800)
+
+            except Exception as e:
+                st.error(f"Se produjo un error al generar el mapa de resultados: {e}")
+                st.code(traceback.format_exc())
+            
+            # Otros gráficos (Mosaico, HAND/Llanuras)
+            if st.session_state.get('visualization_data') and st.session_state.visualization_data.get('plots'):
+                st.markdown("#### Otros Gráficos de Análisis")
+                plots = st.session_state.visualization_data['plots']
+                
+                plot_titles_remaining = {
                     "grafico_1_mosaico": "Características de la Cuenca",
-                    "grafico_3_7_lfp_strahler": "LFP y Red Fluvial por Orden de Strahler",
-                    "grafico_4_perfil_lfp": "Perfil Longitudinal del LFP",
-                    "grafico_5_6_histo_hipso": "Histograma de Elevaciones y Curva Hipsométrica",
                     "grafico_11_llanuras": "Índices de Elevación (HAND y Llanuras de Inundación)"
                 }
-                for key, title in plot_titles.items():
-                    if key in plots and plots[key]: st.image(io.BytesIO(base64.b64decode(plots[key])), caption=title, use_container_width=True)
                 
-                st.subheader("Descargas de Datos Adicionales")
-                col_dl_1, col_dl_2 = st.columns(2)
-                with col_dl_1:
-                    if st.session_state.morphometry_data.get("lfp_profile_data"):
-                        df_lfp_profile = pd.DataFrame(st.session_state.morphometry_data["lfp_profile_data"])
-                        st.download_button("📥 Descargar Perfil LFP (.csv)", df_lfp_profile.to_csv(index=False, sep=';').encode('utf-8'), "perfil_lfp.csv", "text/csv", use_container_width=True)
-                with col_dl_2:
-                    if st.session_state.morphometry_data.get("hypsometric_data"):
-                        df_hypsometric = pd.DataFrame(st.session_state.morphometry_data["hypsometric_data"])
-                        st.download_button("📥 Descargar Curva Hipsométrica (.csv)", df_hypsometric.to_csv(index=False, sep=';').encode('utf-8'), "curva_hipsometrica.csv", "text/csv", use_container_width=True)
+                for key, title in plot_titles_remaining.items():
+                    if key in plots and plots[key]:
+                        st.image(io.BytesIO(base64.b64decode(plots[key])), caption=title, use_container_width=True)
 
-            except Exception as e:
-                st.warning(f"Error al mostrar resultados del Paso 3: {e}")
-                st.code(traceback.format_exc())
-
-    st.divider()
-    st.markdown("##### Consejos para el Ajuste del Umbral de la Red Fluvial en HEC-HMS con un terreno MDT25 ")
-    st.info(f"""**Defina la red:**
+        st.divider()
+        st.markdown("##### Consejos para el Ajuste del Umbral de la Red Fluvial en HEC-HMS con un terreno MDT25 ")
+        st.info(f"""**Defina la red:**
 1. Umbral (nº de celdas) = Área de Drenaje Deseada (m²) / Área de una Celda (m²)
 2. Área de una Celda (m²) = 25 m x 25 m = {CELL_AREA_M2} m² (en un MDT25)
 3. Área de Drenaje (km²) = Umbral (nº de celdas) x Área de una Celda ({CELL_AREA_KM2} km²)
