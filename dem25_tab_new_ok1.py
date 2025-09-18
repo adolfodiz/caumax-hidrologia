@@ -50,6 +50,9 @@ AREA_PROCESSING_LIMIT_KM2 = 50000 # Límite para evitar procesar cuencas gigante
 CELL_AREA_M2 = 625 # Área de una celda de 25x25m
 CELL_AREA_KM2 = CELL_AREA_M2 / 1_000_000 # 0.000625 km²
 
+# dem25_tab.py
+
+# ... (imports y constantes sin cambios) ...
 
 # ==============================================================================
 # SECCIÓN 3: LÓGICA DE ANÁLISIS HIDROLÓGICO (MODIFICADA)
@@ -224,7 +227,7 @@ def calcular_morfometria_cuenca(_pysheds_data, umbral_rio_export):
         stream_features = flw.streams(mask=stream_mask_strahler, strord=strahler_orders)
         gdf_streams_full = gpd.GeoDataFrame.from_features(stream_features, crs=dem_crs)
         
-        # HISTOGRAMA Y CURVA HIPSOMÉTRICA (DATOS)
+        # HISTOGRAMA Y CURVA HIPSOMÉTRICA
         elevaciones_cuenca = conditioned_dem.view()[catch.view()]
         if elevaciones_cuenca.size == 0:
             results['message'] = "No hay datos de elevación válidos en la cuenca para el análisis hipsométrico."
@@ -232,9 +235,8 @@ def calcular_morfometria_cuenca(_pysheds_data, umbral_rio_export):
         
         elev_sorted = np.sort(elevaciones_cuenca)[::-1]
         cell_area = abs(out_transform.a * out_transform.e)
-        area_acumulada_m2 = np.arange(1, len(elev_sorted) + 1) * cell_area
-        area_acumulada_km2 = area_acumulada_m2 / 1_000_000 # Convertir a km2
-        area_normalizada = area_acumulada_km2 / area_acumulada_km2.max() # Normalizar con km2
+        area_acumulada = np.arange(1, len(elev_sorted) + 1) * cell_area
+        area_normalizada = area_acumulada / area_acumulada.max()
         elev_normalizada = (elev_sorted - elev_sorted.min()) / (elev_sorted.max() - elev_sorted.min())
         integral_hipsometrica = abs(np.trapz(area_normalizada, x=elev_normalizada))
 
@@ -266,7 +268,7 @@ def calcular_morfometria_cuenca(_pysheds_data, umbral_rio_export):
             "morphometry_data": {
                 "lfp_profile_data": {"distancia_m": profile_distances, "elevacion_m": profile_elevations},
                 "lfp_metrics": {"cota_ini_m": cota_ini, "cota_fin_m": cota_fin, "longitud_m": longitud_total_m, "pendiente_media": pendiente_media, "tc_h": tc_h, "tc_min": tc_h * 60},
-                "hypsometric_data": {"area_normalizada": area_normalizada.tolist(), "area_acumulada_km2": area_acumulada_km2.tolist(), "elevacion": elev_sorted.tolist(), "integral_hipsometrica": integral_hipsometrica},
+                "hypsometric_data": {"area_normalizada": area_normalizada.tolist(), "elevacion": elev_sorted.tolist(), "integral_hipsometrica": integral_hipsometrica},
                 "lfp_coords": lfp_coords,
                 "gdf_streams_full": gdf_streams_full,
                 "upa_pyflwdir_array": upa.view()
@@ -784,6 +786,7 @@ def render_dem25_tab():
     folium.LayerControl().add_to(map_select)
     map_output_select = st_folium(map_select, key="map_select", use_container_width=True, height=800, returned_objects=['last_clicked'])
 
+    
 
     if map_output_select.get("last_clicked"):
         if st.session_state.get('outlet_coords') != map_output_select["last_clicked"]:
@@ -828,7 +831,7 @@ def render_dem25_tab():
             else:
                 st.error(f"Falló el Paso 1: {results['message']}")
     
-    # Botón 2: Analizar Morfometría y Generar Gráficos
+    # Botón 2: Analizar Morfometría (ahora incluye gráficos)
     with b_col2:
         if st.button("2. Analizar Morfometría y Generar Gráficos", use_container_width=True, disabled=not st.session_state.get('pysheds_data')):
             with st.spinner("Calculando morfometría y generando gráficos..."):
@@ -871,7 +874,7 @@ def render_dem25_tab():
 
                 m_results_1.fit_bounds(gdf_cuenca.to_crs("EPSG:4326").total_bounds[[1, 0, 3, 2]].tolist())
                 folium.LayerControl().add_to(m_results_1)
-                st_folium(m_results_1, key="results_map_1_delineated", use_container_width=True, height=400)
+                st_folium(m_results_1, key="results_map_1_delineated", use_container_width=True, height=400) # Cambiado key para evitar conflicto
             with res1_col2:
                 st.metric("Área de la Cuenca Delineada", f"{area_cuenca_km2:.4f} km²")
                 st.download_button("📥 Descargar Cuenca (.zip)", export_gdf_to_zip(gdf_cuenca, "cuenca_delineada"), "cuenca_delineada.zip", "application/zip", use_container_width=True)
@@ -914,7 +917,7 @@ def render_dem25_tab():
                     zip_rios_strahler = export_gdf_to_zip(gdf_rios_strahler_download, "rios_strahler")
                     st.download_button("📥 Descargar Ríos Strahler (.zip)", zip_rios_strahler, "rios_strahler.zip", "application/zip", use_container_width=True)
 
-            # Gráfico del perfil longitudinal del LFP + tabla
+            # Gráfico del perfil longitudinal del LFP + tabla + descarga CSV
             if st.session_state.get('plots') and st.session_state.plots.get('grafico_4_perfil_lfp'):
                 st.markdown("#### Perfil Longitudinal del LFP")
                 st.image(io.BytesIO(base64.b64decode(st.session_state.plots['grafico_4_perfil_lfp'])), caption="Perfil Longitudinal del LFP", use_container_width=True)
@@ -922,17 +925,19 @@ def render_dem25_tab():
                 if st.session_state.morphometry_data.get("lfp_profile_data"):
                     df_lfp_profile = pd.DataFrame(st.session_state.morphometry_data["lfp_profile_data"])
                     st.dataframe(df_lfp_profile, use_container_width=True)
+                    csv_lfp_profile = df_lfp_profile.to_csv(index=False, sep=';').encode('utf-8')
+                    st.download_button("📥 Descargar Perfil LFP (.csv)", csv_lfp_profile, "perfil_lfp.csv", "text/csv", use_container_width=True)
             
-            # Gráficos de curva hipsométrica + tabla
+            # Gráficos de curva hipsométrica + tabla + descarga CSV
             if st.session_state.get('plots') and st.session_state.plots.get('grafico_5_6_histo_hipso'):
                 st.markdown("#### Histograma de Elevaciones y Curva Hipsométrica")
                 st.image(io.BytesIO(base64.b64decode(st.session_state.plots['grafico_5_6_histo_hipso'])), caption="Histograma de Elevaciones y Curva Hipsométrica", use_container_width=True)
                 
                 if st.session_state.morphometry_data.get("hypsometric_data"):
                     df_hypsometric = pd.DataFrame(st.session_state.morphometry_data["hypsometric_data"])
-                    # Formatear la columna 'area_acumulada_km2' para mostrar 5 decimales
-                    df_hypsometric['area_acumulada_km2'] = df_hypsometric['area_acumulada_km2'].apply(lambda x: f"{x:.5f}")
                     st.dataframe(df_hypsometric, use_container_width=True)
+                    csv_hypsometric = df_hypsometric.to_csv(index=False, sep=';').encode('utf-8')
+                    st.download_button("📥 Descargar Curva Hipsométrica (.csv)", csv_hypsometric, "curva_hipsometrica.csv", "text/csv", use_container_width=True)
             
             st.divider()
             st.markdown("##### Consejos para el Ajuste del Umbral de la Red Fluvial en HEC-HMS con un terreno MDT25 ")
