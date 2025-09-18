@@ -67,7 +67,10 @@ def delinear_cuenca_desde_punto(_dem_bytes, outlet_coords_wgs84, umbral_rio_expo
                 dem_crs = src.crs
                 out_transform = src.transform
                 no_data_value = src.nodata or -32768
-                # dem_array_full = src.read(1).astype(np.float32) # No necesitamos el array completo aquí, PySheds lo leerá
+                dem_array_full = src.read(1).astype(np.float32) # Leer el DEM completo del buffer
+                
+                transformer_wgs84_to_dem_crs = Transformer.from_crs("EPSG:4326", dem_crs, always_xy=True)
+                x_dem_crs, y_dem_crs = transformer_wgs84_to_dem_crs.transform(outlet_coords_wgs84['lng'], outlet_coords_wgs84['lat'])
 
                 # Guardar el DEM en un archivo temporal para PySheds
                 with tempfile.NamedTemporaryFile(delete=False, suffix='.tif') as tmp_dem_pysheds:
@@ -76,9 +79,6 @@ def delinear_cuenca_desde_punto(_dem_bytes, outlet_coords_wgs84, umbral_rio_expo
 
         grid = Grid.from_raster(dem_path_for_pysheds, nodata=no_data_value)
         dem = grid.read_raster(dem_path_for_pysheds, nodata=no_data_value)
-
-        transformer_wgs84_to_dem_crs = Transformer.from_crs("EPSG:4326", dem_crs, always_xy=True)
-        x_dem_crs, y_dem_crs = transformer_wgs84_to_dem_crs.transform(outlet_coords_wgs84['lng'], outlet_coords_wgs84['lat'])
 
         # Asegurarse de que el punto de salida esté dentro de los límites del DEM
         if not (grid.extent[0] <= x_dem_crs <= grid.extent[1] and grid.extent[2] <= y_dem_crs <= grid.extent[3]):
@@ -108,16 +108,10 @@ def delinear_cuenca_desde_punto(_dem_bytes, outlet_coords_wgs84, umbral_rio_expo
         results.update({
             "success": True, "message": "Cuenca delineada con éxito.",
             "pysheds_data": {
-                # Guardamos los arrays NumPy y la metadata, no los objetos PySheds completos
-                "dem_bytes": _dem_bytes, # Guardar el DEM original para reconstruir el Grid
-                "conditioned_dem_array": conditioned_dem.view(),
-                "flowdir_array": flowdir.view(),
-                "acc_array": acc.view(),
-                "catch_array": catch.view(),
-                "x_snap": x_snap,
-                "y_snap": y_snap,
-                "out_transform": out_transform,
-                "dem_crs": dem_crs,
+                "grid": grid,
+                "conditioned_dem": conditioned_dem, "flowdir": flowdir, "acc": acc, "catch": catch,
+                "x_snap": x_snap, "y_snap": y_snap, "out_transform": out_transform, "dem_crs": dem_crs,
+                "dem_path_for_pysheds": dem_path_for_pysheds, # Mantener para referencia, aunque se eliminará al final
                 "no_data_value": no_data_value
             },
             "downloads": {
@@ -136,31 +130,21 @@ def delinear_cuenca_desde_punto(_dem_bytes, outlet_coords_wgs84, umbral_rio_expo
 @st.cache_data(show_spinner="Paso 2: Calculando LFP, red fluvial y métricas...")
 def calcular_morfometria_cuenca(_pysheds_data, umbral_rio_export):
     results = {"success": False, "message": ""}
-    dem_path_for_pysheds = None # Para asegurar la limpieza
     try:
-        # Reconstruir el Grid y los objetos Raster de PySheds
-        dem_bytes = _pysheds_data["dem_bytes"]
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.tif') as tmp_dem_pysheds:
-            tmp_dem_pysheds.write(dem_bytes)
-            dem_path_for_pysheds = tmp_dem_pysheds.name
-
-        grid = Grid.from_raster(dem_path_for_pysheds, nodata=_pysheds_data["no_data_value"])
-        
-        # Reconstruir los objetos Raster a partir de los arrays guardados
-        conditioned_dem = grid.Raster(_pysheds_data["conditioned_dem_array"], grid.affine, grid.crs, grid.nodata)
-        flowdir = grid.Raster(_pysheds_data["flowdir_array"], grid.affine, grid.crs, grid.nodata)
-        acc = grid.Raster(_pysheds_data["acc_array"], grid.affine, grid.crs, grid.nodata)
-        catch = grid.Raster(_pysheds_data["catch_array"], grid.affine, grid.crs, grid.nodata)
-
+        grid = _pysheds_data["grid"]
+        flowdir = _pysheds_data["flowdir"]
+        catch = _pysheds_data["catch"]
         x_snap, y_snap = _pysheds_data["x_snap"], _pysheds_data["y_snap"]
+        conditioned_dem = _pysheds_data["conditioned_dem"]
         out_transform = _pysheds_data["out_transform"]
         dem_crs = _pysheds_data["dem_crs"]
         no_data_value = _pysheds_data["no_data_value"]
 
         # CÁLCULOS DEL LONGEST FLOW PATH (LFP)
         dist = grid._d8_flow_distance(x=x_snap, y=y_snap, fdir=flowdir, xytype='coordinate')
-        dist_catch = np.where(catch.view(), dist.view(), -1) # Usar .view() para los arrays NumPy
+        dist_catch = np.where(catch, dist, -1)
         
+        # Asegurarse de que dist_catch no esté vacío o solo con -1
         if np.all(dist_catch == -1):
             results['message'] = "No se pudo calcular el LFP. El punto de desagüe podría estar en un área sin flujo acumulado o fuera de la cuenca."
             return results
@@ -170,6 +154,7 @@ def calcular_morfometria_cuenca(_pysheds_data, umbral_rio_export):
         lfp_coords = []
         current_row, current_col = start_row, start_col
         
+        # Usar out_transform directamente para obtener coordenadas
         while True:
             # Convertir índice de fila/columna a coordenadas UTM (centro del píxel)
             x_coord, y_coord = out_transform * (current_col + 0.5, current_row + 0.5)
@@ -179,10 +164,10 @@ def calcular_morfometria_cuenca(_pysheds_data, umbral_rio_export):
             if not (0 <= current_row < flowdir.shape[0] and 0 <= current_col < flowdir.shape[1]):
                 break # Fuera de los límites del DEM
             
-            if not catch.view()[current_row, current_col]: # Usar .view()
+            if not catch[current_row, current_col]:
                 break # Fuera de la cuenca
             
-            direction = flowdir.view()[current_row, current_col] # Usar .view()
+            direction = flowdir[current_row, current_col]
             if direction == 0: # Punto final (sumidero o borde)
                 break
             
@@ -198,7 +183,7 @@ def calcular_morfometria_cuenca(_pysheds_data, umbral_rio_export):
                 col, row = inv_transform * (x_c, y_c)
                 # Asegurarse de que los índices estén dentro de los límites
                 if 0 <= int(row) < conditioned_dem.shape[0] and 0 <= int(col) < conditioned_dem.shape[1]:
-                    elevation = conditioned_dem.view()[int(row), int(col)] # Usar .view()
+                    elevation = conditioned_dem[int(row), int(col)]
                     profile_elevations.append(elevation)
                     valid_lfp_coords.append((x_c, y_c))
             except IndexError:
@@ -217,7 +202,7 @@ def calcular_morfometria_cuenca(_pysheds_data, umbral_rio_export):
         tc_h = (0.87 * (longitud_total_m**2 / (1000 * desnivel))**0.385) if desnivel > 0 else 0
 
         # INICIALIZACIÓN DE PYFLWDIR Y CÁLCULO DE ORDEN DE STRAHLER
-        flw = pyflwdir.from_dem(data=conditioned_dem.view(), nodata=no_data_value, transform=out_transform, latlon=False)
+        flw = pyflwdir.from_dem(data=conditioned_dem, nodata=no_data_value, transform=out_transform, latlon=False)
         upa = flw.upstream_area(unit='cell')
         stream_mask_strahler = upa > umbral_rio_export
         strahler_orders = flw.stream_order(mask=stream_mask_strahler, type='strahler')
@@ -225,7 +210,7 @@ def calcular_morfometria_cuenca(_pysheds_data, umbral_rio_export):
         gdf_streams_full = gpd.GeoDataFrame.from_features(stream_features, crs=dem_crs)
         
         # HISTOGRAMA Y CURVA HIPSOMÉTRICA
-        elevaciones_cuenca = conditioned_dem.view()[catch.view()] # Usar .view()
+        elevaciones_cuenca = conditioned_dem[catch]
         if elevaciones_cuenca.size == 0:
             results['message'] = "No hay datos de elevación válidos en la cuenca para el análisis hipsométrico."
             return results
@@ -245,7 +230,7 @@ def calcular_morfometria_cuenca(_pysheds_data, umbral_rio_export):
                 "hypsometric_data": {"area_normalizada": area_normalizada.tolist(), "elevacion": elev_sorted.tolist(), "integral_hipsometrica": integral_hipsometrica},
                 "lfp_coords": lfp_coords,
                 "gdf_streams_full": gdf_streams_full,
-                "upa_pyflwdir_array": upa # Guardar el array NumPy de UPA de pyflwdir
+                "upa": upa # Necesario para HAND/Floodplains
             },
             "downloads": {
                 "lfp": gpd.GeoDataFrame({'id': [1], 'geometry': [LineString(lfp_coords)]}, crs=dem_crs).to_json(),
@@ -256,39 +241,26 @@ def calcular_morfometria_cuenca(_pysheds_data, umbral_rio_export):
     except Exception as e:
         results['message'] = f"Error en morfometría: {e}\n{traceback.format_exc()}"
         return results
-    finally:
-        if dem_path_for_pysheds and os.path.exists(dem_path_for_pysheds):
-            os.remove(dem_path_for_pysheds)
 
 @st.cache_data(show_spinner="Paso 3: Generando gráficos y análisis finales...")
 def generar_graficos_y_analisis(_pysheds_data, _morphometry_data, umbral_rio_export):
     results = {"success": False, "message": ""}
-    dem_path_for_pysheds = None # Para asegurar la limpieza
     try:
-        # Reconstruir el Grid y los objetos Raster de PySheds
-        dem_bytes = _pysheds_data["dem_bytes"]
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.tif') as tmp_dem_pysheds:
-            tmp_dem_pysheds.write(dem_bytes)
-            dem_path_for_pysheds = tmp_dem_pysheds.name
-
-        grid = Grid.from_raster(dem_path_for_pysheds, nodata=_pysheds_data["no_data_value"])
-        
-        # Reconstruir los objetos Raster a partir de los arrays guardados
-        conditioned_dem = grid.Raster(_pysheds_data["conditioned_dem_array"], grid.affine, grid.crs, grid.nodata)
-        flowdir = grid.Raster(_pysheds_data["flowdir_array"], grid.affine, grid.crs, grid.nodata)
-        acc = grid.Raster(_pysheds_data["acc_array"], grid.affine, grid.crs, grid.nodata)
-        catch = grid.Raster(_pysheds_data["catch_array"], grid.affine, grid.crs, grid.nodata)
-
+        grid = _pysheds_data["grid"]
+        catch = _pysheds_data["catch"]
+        conditioned_dem = _pysheds_data["conditioned_dem"]
+        flowdir = _pysheds_data["flowdir"]
+        acc = _pysheds_data["acc"]
         out_transform = _pysheds_data["out_transform"]
         dem_crs = _pysheds_data["dem_crs"]
         no_data_value = _pysheds_data["no_data_value"]
 
         lfp_profile_data = _morphometry_data["lfp_profile_data"]
-        # lfp_metrics = _morphometry_data["lfp_metrics"] # No se usa directamente en gráficos, pero se mantiene
+        lfp_metrics = _morphometry_data["lfp_metrics"]
         hypsometric_data = _morphometry_data["hypsometric_data"]
         lfp_coords = _morphometry_data["lfp_coords"]
         gdf_streams_full = _morphometry_data["gdf_streams_full"]
-        upa_pyflwdir_array = _morphometry_data["upa_pyflwdir_array"] # UPA de pyflwdir (array NumPy)
+        upa = _morphometry_data["upa"] # UPA de pyflwdir
 
         plots = {}
         
@@ -297,9 +269,9 @@ def generar_graficos_y_analisis(_pysheds_data, _morphometry_data, umbral_rio_exp
         fig1, axes = plt.subplots(2, 2, figsize=(12, 10))
         
         # Extensión de la Cuenca
-        axes[0, 0].imshow(catch.view(), extent=plot_extent, cmap='Reds_r') # Usar .view()
+        axes[0, 0].imshow(grid.view(catch, nodata=np.nan), extent=plot_extent, cmap='Reds_r')
         axes[0, 0].set_title("Extensión de la Cuenca")
-        num_celdas_cuenca = np.sum(catch.view()) # Usar .view()
+        num_celdas_cuenca = np.sum(catch)
         area_pixel_m2 = abs(grid.affine.a * grid.affine.e)
         area_cuenca_km2 = (num_celdas_cuenca * area_pixel_m2) / 1_000_000
         area_texto = f'{area_cuenca_km2:.1f} km²'
@@ -308,16 +280,16 @@ def generar_graficos_y_analisis(_pysheds_data, _morphometry_data, umbral_rio_exp
         axes[0, 0].text(centro_x, centro_y, area_texto, ha='center', va='center', color='white', fontsize=12, fontweight='bold')
         
         # Elevación
-        im_dem = axes[0, 1].imshow(conditioned_dem.view(), extent=plot_extent, cmap='terrain') # Usar .view()
+        im_dem = axes[0, 1].imshow(grid.view(conditioned_dem, nodata=np.nan), extent=plot_extent, cmap='terrain')
         axes[0, 1].set_title("Elevación")
         fig1.colorbar(im_dem, ax=axes[0, 1], label='Elevación (m)', shrink=0.7)
         
         # Dirección de Flujo
-        im_fdir = axes[1, 0].imshow(flowdir.view(), extent=plot_extent, cmap='twilight') # Usar .view()
+        im_fdir = axes[1, 0].imshow(grid.view(flowdir, nodata=np.nan), extent=plot_extent, cmap='twilight')
         axes[1, 0].set_title("Dirección de Flujo")
         
         # Acumulación de Flujo
-        im_acc = axes[1, 1].imshow(acc.view(), extent=plot_extent, cmap='cubehelix', norm=colors.LogNorm(vmin=1, vmax=acc.view().max())) # Usar .view()
+        im_acc = axes[1, 1].imshow(grid.view(acc, nodata=np.nan), extent=plot_extent, cmap='cubehelix', norm=colors.LogNorm(vmin=1, vmax=acc.max()))
         axes[1, 1].set_title("Acumulación de Flujo")
         fig1.colorbar(im_acc, ax=axes[1, 1], label='Nº celdas', shrink=0.7)
         
@@ -328,14 +300,12 @@ def generar_graficos_y_analisis(_pysheds_data, _morphometry_data, umbral_rio_exp
 
         # GRÁFICO 3/7 UNIFICADO: LFP y Red Fluvial de Strahler
         # Recortar la red fluvial a la cuenca delineada
-        shapes_cuenca_clip = features.shapes(catch.view().astype(np.uint8), mask=catch.view(), transform=out_transform) # Usar .view()
+        shapes_cuenca_clip = features.shapes(catch.astype(np.uint8), mask=catch, transform=out_transform)
         cuenca_geom_clip = [Polygon(s['coordinates'][0]) for s, v in shapes_cuenca_clip if v == 1][0]
         gdf_cuenca_clip = gpd.GeoDataFrame(geometry=[cuenca_geom_clip], crs=dem_crs)
         gdf_streams_recortado = gpd.clip(gdf_streams_full, gdf_cuenca_clip)
         
-        dem_cuenca_recortada = conditioned_dem.view() # Usar .view()
-        dem_cuenca_recortada = np.where(catch.view(), dem_cuenca_recortada, np.nan) # Enmascarar fuera de la cuenca
-        
+        dem_cuenca_recortada = grid.view(conditioned_dem, nodata=np.nan)
         fig37, axes = plt.subplots(1, 2, figsize=(18, 9))
         ax1 = axes[0]
         im1 = ax1.imshow(dem_cuenca_recortada, extent=plot_extent, cmap='terrain', zorder=1)
@@ -347,6 +317,7 @@ def generar_graficos_y_analisis(_pysheds_data, _morphometry_data, umbral_rio_exp
         ax2.imshow(dem_cuenca_recortada, extent=plot_extent, cmap='Greys_r', alpha=0.8, zorder=1)
         gdf_streams_recortado_clean = gdf_streams_recortado[gdf_streams_recortado.geom_type.isin(["LineString", "MultiLineString"])]
         if not gdf_streams_recortado_clean.empty:
+            # Asegurarse de que 'strord' sea numérico para el colormap
             gdf_streams_recortado_clean['strord'] = pd.to_numeric(gdf_streams_recortado_clean['strord'], errors='coerce')
             gdf_streams_recortado_clean = gdf_streams_recortado_clean.dropna(subset=['strord'])
             if not gdf_streams_recortado_clean.empty:
@@ -368,7 +339,7 @@ def generar_graficos_y_analisis(_pysheds_data, _morphometry_data, umbral_rio_exp
         plots['grafico_4_perfil_lfp'] = fig_to_base64(fig4)
 
         # GRÁFICOS 5 y 6: HISTOGRAMA Y CURVA HIPSOMÉTRICA
-        elevaciones_cuenca = conditioned_dem.view()[catch.view()] # Usar .view()
+        elevaciones_cuenca = conditioned_dem[catch]
         fig56, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
         ax1.hist(elevaciones_cuenca, bins=50, color='skyblue', edgecolor='black')
         ax1.set_title('Distribución de Elevaciones'); ax1.set_xlabel('Elevación (m)'); ax1.set_ylabel('Frecuencia')
@@ -386,17 +357,15 @@ def generar_graficos_y_analisis(_pysheds_data, _morphometry_data, umbral_rio_exp
         plots['grafico_5_6_histo_hipso'] = fig_to_base64(fig56)
 
         # GRÁFICO 11: HAND Y LLANURAS DE INUNDACIÓN
-        flw_recortado = pyflwdir.from_dem(data=conditioned_dem.view(), nodata=no_data_value, transform=out_transform, latlon=False)
-        # Usar el upa_pyflwdir_array guardado, no recalcular
-        upa_km2 = flw_recortado.Raster(upa_pyflwdir_array, flw_recortado.affine, flw_recortado.crs, flw_recortado.nodata).to_crs(unit='km2')
-        
+        flw_recortado = pyflwdir.from_dem(data=conditioned_dem, nodata=no_data_value, transform=out_transform, latlon=False)
+        upa_km2 = flw_recortado.upstream_area(unit='km2')
         upa_min_threshold = 1.0 # Umbral para drenajes en km2
-        hand = flw_recortado.hand(drain=upa_km2.view() > upa_min_threshold, elevtn=conditioned_dem.view()) # Usar .view()
-        floodplains = flw_recortado.floodplains(elevtn=conditioned_dem.view(), uparea=upa_km2.view(), upa_min=upa_min_threshold) # Usar .view()
+        hand = flw_recortado.hand(drain=upa_km2 > upa_min_threshold, elevtn=conditioned_dem)
+        floodplains = flw_recortado.floodplains(elevtn=conditioned_dem, uparea=upa_km2, upa_min=upa_min_threshold)
         
-        dem_background = np.where(catch.view(), conditioned_dem.view(), np.nan) # Usar .view()
-        hand_masked = np.where(catch.view() & (hand > 0), hand, np.nan) # Usar .view()
-        floodplains_masked = np.where(catch.view() & (floodplains > 0), 1.0, np.nan) # Usar .view()
+        dem_background = np.where(catch, conditioned_dem, np.nan)
+        hand_masked = np.where(catch & (hand > 0), hand, np.nan)
+        floodplains_masked = np.where(catch & (floodplains > 0), 1.0, np.nan)
         
         fig11, axes = plt.subplots(1, 2, figsize=(18, 9))
         ax1, ax2 = axes[0], axes[1]
@@ -428,9 +397,6 @@ def generar_graficos_y_analisis(_pysheds_data, _morphometry_data, umbral_rio_exp
     except Exception as e:
         results['message'] = f"Error en gráficos: {e}\n{traceback.format_exc()}"
         return results
-    finally:
-        if dem_path_for_pysheds and os.path.exists(dem_path_for_pysheds):
-            os.remove(dem_path_for_pysheds)
 
 # ==============================================================================
 # SECCIÓN 4: FUNCIONES AUXILIARES DE LA PESTAÑA (SIN CAMBIOS)
@@ -535,10 +501,12 @@ def procesar_datos_poligono(polygon_geojson_str):
 def export_gdf_to_zip(gdf, filename_base):
     with tempfile.TemporaryDirectory() as tmpdir:
         if gdf.crs is None: gdf.set_crs("EPSG:4326", inplace=True) # Asegurar CRS si no está definido
-        # Si el CRS es geográfico, lo proyectamos a UTM30N para la exportación de Shapefile.
-        # Si ya es proyectado (ej. UTM30N), lo mantenemos.
+        # Asegurarse de que el CRS sea UTM para la exportación si es posible, o al menos un CRS proyectado
+        # Aquí asumimos que el GDF ya tiene el CRS correcto (UTM30N) si viene de los cálculos hidrológicos
+        # o WGS84 si es de la entrada del usuario. Para exportar SHP, es mejor proyectado.
+        # Si el CRS es geográfico, lo proyectamos a UTM30N para la exportación.
         if gdf.crs.is_geographic:
-            gdf_proj = gdf.to_crs("EPSG:25830") # Proyectar a UTM30N
+            gdf_proj = gdf.to_crs("EPSG:25830")
         else:
             gdf_proj = gdf
             
@@ -736,15 +704,6 @@ def render_dem25_tab():
         img_str = base64.b64encode(buffered.getvalue()).decode()
         img_url = f"data:image/png;base64,{img_str}"
         folium.raster_layers.ImageOverlay(image=img_url, bounds=[[bounds[1], bounds[0]], [bounds[3], bounds[2]]], opacity=0.6, pixelated=True, name='Referencia de Cauces (Acumulación)').add_to(map_select)
-
-    # --- NUEVO: Cargar la cuenca delineada si ya existe ---
-    if st.session_state.get('delineated_downloads') and st.session_state.delineated_downloads.get("cuenca"):
-        try:
-            gdf_delineated_cuenca = gpd.read_file(st.session_state.delineated_downloads["cuenca"]).to_crs("EPSG:4326")
-            folium.GeoJson(gdf_delineated_cuenca, name="Cuenca Delineada (Paso 1)", style_function=lambda x: {'color': 'blue', 'weight': 3, 'fillOpacity': 0.2}).add_to(map_select)
-        except Exception as e:
-            st.warning(f"No se pudo cargar la cuenca delineada en el mapa de selección: {e}")
-    # --- FIN NUEVO ---
 
     if 'outlet_coords' in st.session_state and st.session_state.outlet_coords is not None:
         coords = st.session_state.outlet_coords
