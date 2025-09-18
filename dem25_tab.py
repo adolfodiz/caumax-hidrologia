@@ -19,7 +19,9 @@ from shapely.geometry import shape, Point, LineString, Polygon
 from pyproj import CRS, Transformer
 import base64
 from PIL import Image
-
+import locale # Asegúrate de que esta línea está al principio del archivo
+import platform # Y también esta
+import sys # Asegúrate de que 'import sys' está al principio de tu script
 # --- Imports específicos del análisis hidrológico (traídos de delinear_cuenca.py) ---
 import traceback
 import matplotlib.pyplot as plt
@@ -33,6 +35,7 @@ from rasterio import features
 import rasterio
 from core_logic.gis_utils import get_local_path_from_url # Necesitamos esta para los GPKG y ZIPs
 
+import branca.colormap as cm
 # ==============================================================================
 # SECCIÓN 2: CONSTANTES Y CONFIGURACIÓN
 # ==============================================================================
@@ -828,6 +831,7 @@ def render_dem25_tab():
 
 
     # --- Lógica para mostrar los resultados por pasos ---
+    # --- Lógica para mostrar los resultados por pasos ---
     if st.session_state.get('pysheds_data'):
         st.divider()
         st.header("Resultados del Análisis Hidrológico")
@@ -841,6 +845,9 @@ def render_dem25_tab():
             res1_col1, res1_col2 = st.columns([2,1])
             with res1_col1:
                 m_results_1 = folium.Map(tiles="CartoDB positron")
+                folium.TileLayer('OpenStreetMap').add_to(m_results_1) # Añadir OpenStreetMap
+                folium.TileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', attr='Esri', name='Imágenes Satélite').add_to(m_results_1)
+
                 folium.GeoJson(gdf_cuenca.to_crs("EPSG:4326"), name="Cuenca Delineada", style_function=lambda x: {'color': '#FF0000', 'weight': 2.5, 'fillOpacity': 0.2}).add_to(m_results_1)
                 
                 # Añadir el punto de salida
@@ -849,6 +856,7 @@ def render_dem25_tab():
                 folium.Marker([lat, lon], popup="Punto de Desagüe", icon=folium.Icon(color='green', icon='tint', prefix='fa')).add_to(m_results_1)
 
                 m_results_1.fit_bounds(gdf_cuenca.to_crs("EPSG:4326").total_bounds[[1, 0, 3, 2]].tolist())
+                folium.LayerControl().add_to(m_results_1) # Añadir control de capas
                 st_folium(m_results_1, key="results_map_1", use_container_width=True, height=400)
             with res1_col2:
                 st.metric("Área de la Cuenca Delineada", f"{area_cuenca_km2:.4f} km²")
@@ -878,7 +886,7 @@ def render_dem25_tab():
                     st.metric("Tiempo Concentración", f"{metrics.get('tc_h', 0):.3f} h")
                     st.caption(f"Equivalente a {metrics.get('tc_min', 0):.2f} minutos")
             
-            # 2. Gráfico del perfil longitudinal del LFP y tabla de LFP con elevación y descarga
+            # 2. Gráfico del perfil longitudinal del LFP + tabla + descarga CSV
             if st.session_state.get('visualization_data') and st.session_state.visualization_data.get('plots', {}).get('grafico_4_perfil_lfp'):
                 st.markdown("#### Perfil Longitudinal del LFP")
                 st.image(io.BytesIO(base64.b64decode(st.session_state.visualization_data['plots']['grafico_4_perfil_lfp'])), caption="Perfil Longitudinal del LFP", use_container_width=True)
@@ -889,7 +897,13 @@ def render_dem25_tab():
                     csv_lfp_profile = df_lfp_profile.to_csv(index=False, sep=';').encode('utf-8')
                     st.download_button("📥 Descargar Perfil LFP (.csv)", csv_lfp_profile, "perfil_lfp.csv", "text/csv", use_container_width=True)
             
-            # 3. Gráficos de curva hipsométrica (área normalizada, elevación, integral hipsométrica)
+            # Descarga del LFP GeoJSON (ZIP) - AÑADIDO AQUÍ SEGÚN EL ORDEN
+            if st.session_state.get('morphometry_downloads') and st.session_state.morphometry_downloads.get("lfp"):
+                gdf_lfp_download = gpd.read_file(st.session_state.morphometry_downloads["lfp"])
+                zip_lfp = export_gdf_to_zip(gdf_lfp_download, "lfp")
+                st.download_button("📥 Descargar LFP (.zip)", zip_lfp, "lfp.zip", "application/zip", use_container_width=True)
+
+            # 3. Gráficos de curva hipsométrica + tabla + descarga CSV
             if st.session_state.get('visualization_data') and st.session_state.visualization_data.get('plots', {}).get('grafico_5_6_histo_hipso'):
                 st.markdown("#### Histograma de Elevaciones y Curva Hipsométrica")
                 st.image(io.BytesIO(base64.b64decode(st.session_state.visualization_data['plots']['grafico_5_6_histo_hipso'])), caption="Histograma de Elevaciones y Curva Hipsométrica", use_container_width=True)
@@ -907,7 +921,21 @@ def render_dem25_tab():
                 zip_rios_strahler = export_gdf_to_zip(gdf_rios_strahler_download, "rios_strahler")
                 st.download_button("📥 Descargar Ríos Strahler (.zip)", zip_rios_strahler, "rios_strahler.zip", "application/zip", use_container_width=True)
 
-            # 5. Mapa Folium con las capas
+            # Otros gráficos (Mosaico, HAND/Llanuras) - MOVIDOS AQUÍ
+            if st.session_state.get('visualization_data') and st.session_state.visualization_data.get('plots'):
+                st.markdown("#### Otros Gráficos de Análisis")
+                plots = st.session_state.visualization_data['plots']
+                
+                plot_titles_remaining = {
+                    "grafico_1_mosaico": "Características de la Cuenca",
+                    "grafico_11_llanuras": "Índices de Elevación (HAND y Llanuras de Inundación)"
+                }
+                
+                for key, title in plot_titles_remaining.items():
+                    if key in plots and plots[key]:
+                        st.image(io.BytesIO(base64.b64decode(plots[key])), caption=title, use_container_width=True)
+
+            # 5. Mapa Folium con las capas - AHORA AL FINAL
             st.markdown("#### Visor de Resultados GIS")
             st.info("Este mapa muestra la cuenca delineada, el LFP, la red fluvial por orden de Strahler y el punto de desagüe. Las capas están disponibles para descarga en formato Shapefile.")
             try:
@@ -920,6 +948,7 @@ def render_dem25_tab():
                 gdf_punto_wgs84 = gdf_punto_map.to_crs("EPSG:4326")
 
                 m_results_2 = folium.Map(tiles="CartoDB positron")
+                folium.TileLayer('OpenStreetMap').add_to(m_results_2) # Añadir OpenStreetMap
                 folium.TileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', attr='Esri', name='Imágenes Satélite').add_to(m_results_2)
 
                 folium.GeoJson(gdf_cuenca_wgs84, name="Cuenca Delineada", style_function=lambda x: {'color': '#FF0000', 'weight': 2.5, 'fillColor': '#FF0000', 'fillOpacity': 0.2}).add_to(m_results_2)
@@ -965,23 +994,9 @@ def render_dem25_tab():
                 st.error(f"Se produjo un error al generar el mapa de resultados: {e}")
                 st.code(traceback.format_exc())
             
-            # Otros gráficos (Mosaico, HAND/Llanuras)
-            if st.session_state.get('visualization_data') and st.session_state.visualization_data.get('plots'):
-                st.markdown("#### Otros Gráficos de Análisis")
-                plots = st.session_state.visualization_data['plots']
-                
-                plot_titles_remaining = {
-                    "grafico_1_mosaico": "Características de la Cuenca",
-                    "grafico_11_llanuras": "Índices de Elevación (HAND y Llanuras de Inundación)"
-                }
-                
-                for key, title in plot_titles_remaining.items():
-                    if key in plots and plots[key]:
-                        st.image(io.BytesIO(base64.b64decode(plots[key])), caption=title, use_container_width=True)
-
-        st.divider()
-        st.markdown("##### Consejos para el Ajuste del Umbral de la Red Fluvial en HEC-HMS con un terreno MDT25 ")
-        st.info(f"""**Defina la red:**
+            st.divider()
+            st.markdown("##### Consejos para el Ajuste del Umbral de la Red Fluvial en HEC-HMS con un terreno MDT25 ")
+            st.info(f"""**Defina la red:**
 1. Umbral (nº de celdas) = Área de Drenaje Deseada (m²) / Área de una Celda (m²)
 2. Área de una Celda (m²) = 25 m x 25 m = {CELL_AREA_M2} m² (en un MDT25)
 3. Área de Drenaje (km²) = Umbral (nº de celdas) x Área de una Celda ({CELL_AREA_KM2} km²)
