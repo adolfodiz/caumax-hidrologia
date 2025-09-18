@@ -243,7 +243,8 @@ def calcular_morfometria_cuenca(_pysheds_data, umbral_rio_export):
             "morphometry_data": {
                 "lfp_profile_data": {"distancia_m": profile_distances, "elevacion_m": profile_elevations},
                 "lfp_metrics": {"cota_ini_m": cota_ini, "cota_fin_m": cota_fin, "longitud_m": longitud_total_m, "pendiente_media": pendiente_media, "tc_h": tc_h, "tc_min": tc_h * 60},
-                "hypsometric_data": {"area_normalizada": area_normalizada.tolist(), "area_acumulada": area_acumulada.tolist(), "elevacion": elev_sorted.tolist(), "integral_hipsometrica": integral_hipsometrica}, # area_acumulada en m2
+                # Guardar area_normalizada y elev_sorted como arrays NumPy
+                "hypsometric_data": {"area_normalizada": area_normalizada, "area_acumulada": area_acumulada, "elevacion": elev_sorted, "integral_hipsometrica": integral_hipsometrica}, # area_acumulada en m2
                 "lfp_coords": lfp_coords,
                 # No almacenar gdf_streams_full ni upa_pyflwdir_array aquí para reducir memoria
             },
@@ -278,14 +279,14 @@ def generar_graficos_y_analisis(_pysheds_data, _morphometry_data):
             dem_path_for_pysheds = tmp_dem_pysheds.name
 
         grid = Grid.from_raster(dem_path_for_pysheds, nodata=no_data_value)
-        dem = grid.read_raster(tmp_dem_pysheds.name, nodata=no_data_value) # Usar tmp_dem_pysheds.name
-        
+        dem = grid.read_raster(tmp_dem_pysheds.name, nodata=no_data_value)
+
         # Re-ejecutar preprocesamiento para obtener conditioned_dem y catch (necesario para histograma)
         pit_filled_dem = grid.fill_pits(dem)
         flooded_dem = grid.fill_depressions(pit_filled_dem)
         conditioned_dem = grid.resolve_flats(flooded_dem)
-        flowdir = grid.flowdir(conditioned_dem) # Necesario para catch
-        acc = grid.accumulation(flowdir) # Necesario para catch
+        flowdir = grid.flowdir(conditioned_dem)
+        acc = grid.accumulation(flowdir)
         catch = grid.catchment(x=x_snap, y=y_snap, fdir=flowdir, xytype="coordinate")
 
         # Recuperar datos para gráficos
@@ -296,8 +297,8 @@ def generar_graficos_y_analisis(_pysheds_data, _morphometry_data):
         
         # GRÁFICO 4: PERFIL LONGITUDINAL DEL LFP
         fig4, ax = plt.subplots(figsize=(12, 6))
-        ax.plot(np.array(lfp_profile_data["distancia_m"]) / 1000, lfp_profile_data["elevacion_m"], color='darkblue')
-        ax.fill_between(np.array(lfp_profile_data["distancia_m"]) / 1000, lfp_profile_data["elevacion_m"], alpha=0.2, color='lightblue')
+        ax.plot(np.array(lfp_profile_data["distancia_m"]) / 1000, np.array(lfp_profile_data["elevacion_m"]), color='darkblue') # Asegurar que son arrays
+        ax.fill_between(np.array(lfp_profile_data["distancia_m"]) / 1000, np.array(lfp_profile_data["elevacion_m"]), alpha=0.2, color='lightblue') # Asegurar que son arrays
         ax.set_title('Perfil Longitudinal del LFP'); ax.set_xlabel('Distancia (km)'); ax.set_ylabel('Elevación (m)'); ax.grid(True)
         plots['grafico_4_perfil_lfp'] = fig_to_base64(fig4)
 
@@ -307,9 +308,10 @@ def generar_graficos_y_analisis(_pysheds_data, _morphometry_data):
         ax1.hist(elevaciones_cuenca, bins=50, color='skyblue', edgecolor='black')
         ax1.set_title('Distribución de Elevaciones'); ax1.set_xlabel('Elevación (m)'); ax1.set_ylabel('Frecuencia')
         
-        area_normalizada = hypsometric_data["area_normalizada"]
-        elev_sorted = hypsometric_data["elevacion"]
-        integral_hipsometrica = hypsometric_data["integral_hipsometrica"]
+        # Convertir a NumPy arrays al recuperar
+        area_normalizada = np.array(hypsometric_data["area_normalizada"])
+        elev_sorted = np.array(hypsometric_data["elevacion"])
+        integral_hipsometrica = hypsometric_data["integral_hipsometrica"] # Este ya es un float
         
         ax2.plot(area_normalizada, elev_sorted, color='red', linewidth=2, label='Curva Hipsométrica')
         ax2.fill_between(area_normalizada, elev_sorted, elev_sorted.min(), color='red', alpha=0.2)
@@ -329,6 +331,7 @@ def generar_graficos_y_analisis(_pysheds_data, _morphometry_data):
     finally:
         if dem_path_for_pysheds and os.path.exists(dem_path_for_pysheds):
             os.remove(dem_path_for_pysheds)
+
 
 # ==============================================================================
 # SECCIÓN 4: FUNCIONES AUXILIARES DE LA PESTAÑA (SIN CAMBIOS)
@@ -651,9 +654,6 @@ def render_dem25_tab():
     folium.LayerControl().add_to(map_select)
     map_output_select = st_folium(map_select, key="map_select", use_container_width=True, height=800, returned_objects=['last_clicked'])
 
-
-
-    # ... (código anterior de render_dem25_tab hasta aquí, incluyendo el map_output_select) ...
 
     if map_output_select.get("last_clicked"):
         if st.session_state.get('outlet_coords') != map_output_select["last_clicked"]:
