@@ -51,6 +51,10 @@ CELL_AREA_M2 = 625 # Área de una celda de 25x25m
 CELL_AREA_KM2 = CELL_AREA_M2 / 1_000_000 # 0.000625 km²
 
 
+# dem25_tab.py
+
+# ... (imports y constantes sin cambios) ...
+
 # ==============================================================================
 # SECCIÓN 3: LÓGICA DE ANÁLISIS HIDROLÓGICO (MODIFICADA)
 # ==============================================================================
@@ -232,9 +236,8 @@ def calcular_morfometria_cuenca(_pysheds_data, umbral_rio_export):
         
         elev_sorted = np.sort(elevaciones_cuenca)[::-1]
         cell_area = abs(out_transform.a * out_transform.e)
-        area_acumulada_m2 = np.arange(1, len(elev_sorted) + 1) * cell_area
-        area_acumulada_km2 = area_acumulada_m2 / 1_000_000 # Convertir a km2
-        area_normalizada = area_acumulada_km2 / area_acumulada_km2.max() # Normalizar con km2
+        area_acumulada = np.arange(1, len(elev_sorted) + 1) * cell_area # Mantener en m2
+        area_normalizada = area_acumulada / area_acumulada.max()
         elev_normalizada = (elev_sorted - elev_sorted.min()) / (elev_sorted.max() - elev_sorted.min())
         integral_hipsometrica = abs(np.trapz(area_normalizada, x=elev_normalizada))
 
@@ -266,10 +269,9 @@ def calcular_morfometria_cuenca(_pysheds_data, umbral_rio_export):
             "morphometry_data": {
                 "lfp_profile_data": {"distancia_m": profile_distances, "elevacion_m": profile_elevations},
                 "lfp_metrics": {"cota_ini_m": cota_ini, "cota_fin_m": cota_fin, "longitud_m": longitud_total_m, "pendiente_media": pendiente_media, "tc_h": tc_h, "tc_min": tc_h * 60},
-                "hypsometric_data": {"area_normalizada": area_normalizada.tolist(), "area_acumulada_km2": area_acumulada_km2.tolist(), "elevacion": elev_sorted.tolist(), "integral_hipsometrica": integral_hipsometrica},
+                "hypsometric_data": {"area_normalizada": area_normalizada.tolist(), "area_acumulada": area_acumulada.tolist(), "elevacion": elev_sorted.tolist(), "integral_hipsometrica": integral_hipsometrica}, # area_acumulada en m2
                 "lfp_coords": lfp_coords,
-                "gdf_streams_full": gdf_streams_full,
-                "upa_pyflwdir_array": upa.view()
+                # No almacenar gdf_streams_full ni upa_pyflwdir_array aquí para reducir memoria
             },
             "downloads": {
                 "lfp": gpd.GeoDataFrame({'id': [1], 'geometry': [LineString(lfp_coords)]}, crs=dem_crs).to_json(),
@@ -785,6 +787,7 @@ def render_dem25_tab():
     map_output_select = st_folium(map_select, key="map_select", use_container_width=True, height=800, returned_objects=['last_clicked'])
 
 
+
     if map_output_select.get("last_clicked"):
         if st.session_state.get('outlet_coords') != map_output_select["last_clicked"]:
             st.session_state.outlet_coords = map_output_select["last_clicked"]
@@ -930,8 +933,8 @@ def render_dem25_tab():
                 
                 if st.session_state.morphometry_data.get("hypsometric_data"):
                     df_hypsometric = pd.DataFrame(st.session_state.morphometry_data["hypsometric_data"])
-                    # Formatear la columna 'area_acumulada_km2' para mostrar 5 decimales
-                    df_hypsometric['area_acumulada_km2'] = df_hypsometric['area_acumulada_km2'].apply(lambda x: f"{x:.5f}")
+                    # Formatear la columna 'area_acumulada' para mostrar 5 decimales
+                    df_hypsometric['area_acumulada'] = df_hypsometric['area_acumulada'].apply(lambda x: f"{x:.5f}")
                     st.dataframe(df_hypsometric, use_container_width=True)
             
             st.divider()
