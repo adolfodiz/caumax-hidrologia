@@ -44,7 +44,7 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 HOJAS_MTN25_PATH = "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/caumax-hidrologia-data/MTN25_ACTUAL_ETRS89_Peninsula_Baleares_Canarias.zip"
 # --- ¡CRÍTICO! Apunta al COG grande de 700MB ---
 DEM_NACIONAL_PATH = "https://pub-e3d06a464df847c6962ef2ff7362c24e.r2.dev/caumax-hidrologia-data/MDT25_peninsula_UTM30N_COG.tif"
-BUFFER_METROS = 5000
+BUFFER_METROS = 1000
 LIMITE_AREA_KM2 = 15000
 AREA_PROCESSING_LIMIT_KM2 = 50000 # Límite para evitar procesar cuencas gigantes en Pestaña 2
 CELL_AREA_M2 = 625 # Área de una celda de 25x25m
